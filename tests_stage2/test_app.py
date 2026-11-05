@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from types import SimpleNamespace
 
 import httpx2
@@ -73,7 +74,8 @@ def test_login_isolation_upload_and_persistence(tmp_path):
         assert client.post(path + "/turn", json={"prompt": "你好"}).status_code == 503
 
 
-def test_agent_tools_question_resume_and_failure(tmp_path):
+@pytest.mark.parametrize("log_mode", ["simple", "detailed"])
+def test_agent_tools_question_resume_and_failure(tmp_path, log_mode, capsys):
     requests = []
     state = {"fail": False}
 
@@ -103,12 +105,12 @@ def test_agent_tools_question_resume_and_failure(tmp_path):
         ))
         return create_agent(settings, user_id, db, model=model)
 
-    settings = Settings(data_dir=tmp_path, api_key="test-key")
+    settings = Settings(data_dir=tmp_path, api_key="test-key", log_mode=log_mode)
     with TestClient(create_app(settings, agent_factory=factory)) as client:
         user = login(client, "alice")
         conversation = client.post("/api/conversations").json()
         path = f"/api/conversations/{conversation['id']}"
-        response = client.post(path + "/turn", json={"prompt": "培训报销？"})
+        response = client.post(path + "/turn", json={"prompt": "培训报销？test-key"})
         assert response.status_code == 200
         assert '"type": "done"' in response.text, response.text
         paused = client.get(path).json()
@@ -144,6 +146,42 @@ def test_agent_tools_question_resume_and_failure(tmp_path):
                    for item in requests[-1]["messages"])
         client.post(path + "/turn", json={"prompt": "再说一遍"})
         assert len(client.get(path).json()["transcript"]) == 6
+
+    log_text = "\n".join(path.read_text(encoding="utf-8") for path in (tmp_path / "logs").glob("*.txt"))
+    assert "test-key" not in log_text
+    assert "test-key" not in capsys.readouterr().err
+    if log_mode == "simple":
+        assert "培训报销？" not in log_text
+        assert "是否外地培训" not in log_text
+        assert "private-key-body" not in log_text
+        assert "gen_ai.input.messages" not in log_text
+    else:
+        spans = [json.JSONDecoder().raw_decode(part)[0] for part in re.split(
+            r"(?m)^.* INFO backend.trace \n", log_text,
+        )[1:]]
+        model_spans = [span for span in spans
+                       if span["attributes"].get("gen_ai.operation.name") == "chat"]
+        assert len(model_spans) == len(requests)
+        assert all("gen_ai.input.messages" in span["attributes"] for span in model_spans)
+        assert any("gen_ai.output.messages" in span["attributes"] for span in model_spans)
+        # 当前框架把 API 认证异常记录在同一 trace 的 Agent span 上。
+        failed = [span for span in spans if span["status"]["status_code"] == "ERROR"]
+        assert failed and "401" in failed[0]["status"]["description"]
+        assert any(span["context"]["trace_id"] == failed[0]["context"]["trace_id"]
+                   for span in model_spans)
+        assert "培训报销？[REDACTED]" in log_text
+        assert "450" in log_text
+        assert "是否外地培训" in log_text
+        assert '"conversation_id"' in log_text
+        assert conversation["id"] in log_text
+        assert "tool_arguments" in log_text or "gen_ai.tool.call.arguments" in log_text
+        assert "tool_response" in log_text or "gen_ai.tool.call.result" in log_text
+        assert any(
+            part.get("id") == "ask1" and part.get("result") == "是"
+            for span in model_spans
+            for message in span["attributes"]["gen_ai.input.messages"]
+            for part in message["parts"]
+        )
 
 
 async def test_stop_and_concurrent_turn_protect_history(tmp_path):

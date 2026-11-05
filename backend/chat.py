@@ -6,6 +6,7 @@ from copy import deepcopy
 
 from fastapi import HTTPException
 from pydantic_ai import DeferredToolRequests, DeferredToolResults
+from pydantic_ai.capabilities import Instrumentation
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
     FunctionToolResultEvent,
@@ -41,9 +42,10 @@ def detail(conversation):
 
 
 class ChatService:
-    def __init__(self, db, settings, agent_factory=create_agent):
+    def __init__(self, db, settings, agent_factory=create_agent, instrumentation=None):
         self.db, self.settings, self.agent_factory = db, settings, agent_factory
         self.tasks = {}
+        self.instrumentation = instrumentation
 
     async def start(self, user, conversation_id, prompt, answers):
         conversation = await owned(self.db, conversation_id, user.id)
@@ -145,6 +147,10 @@ class ChatService:
                 message_history=ModelMessagesTypeAdapter.validate_python(conversation.history),
                 deferred_tool_results=DeferredToolResults(calls=answers) if answers else None,
                 event_stream_handler=events, usage=usage, usage_limits=UsageLimits(request_limit=8),
+                conversation_id=conversation.id,
+                metadata={"conversation_id": conversation.id, "user_id": user.id},
+                capabilities=[Instrumentation(settings=self.instrumentation)]
+                if self.instrumentation else [],
             )
             pending = []
             if isinstance(result.output, DeferredToolRequests):

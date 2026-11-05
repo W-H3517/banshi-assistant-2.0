@@ -2,18 +2,22 @@
 
 第二阶段本地试用程序：简易登录、个人会话隔离、共享 Markdown 制度知识库、Agent 流式问答。前端使用 Vue 3 + TypeScript + Vite + Element Plus，后端使用 FastAPI、Pydantic AI 和 SQLite。
 
-## 快速启动
+## 先选启动方式
 
-首次安装和构建，在项目根目录执行：
+| 用途 | 需要启动 | 浏览器地址 | 前端修改后 |
+| --- | --- | --- | --- |
+| **日常开发，支持热更新** | 后端（带 `--reload`）＋ Vite 前端，两个终端 | **http://127.0.0.1:5173/** | 保存源码后自动更新，通常无需手动刷新或构建。 |
+| **使用构建好的版本** | 只启动后端 | **http://127.0.0.1:8000/** | 重新构建前端，再刷新页面。 |
+
+以下命令均在项目根目录的 PowerShell 中执行。两种方式共用一个 8000 后端，不要重复启动；终端内按 `Ctrl+C` 停止服务。
+
+## 首次准备
 
 ```powershell
+cd 'D:\公司文件\banshi-assistant-2.0'
 uv sync --locked
 npm --prefix frontend ci
-npm --prefix frontend run build
-uv run --locked python -m backend
 ```
-
-以后可直接执行最后一条命令。浏览器打开 http://127.0.0.1:8000/ 。后端同时提供构建后的页面和 API，默认只监听本机，使用单个进程。
 
 本地 `.env`：
 
@@ -23,6 +27,85 @@ DEEPSEEK_MODEL=deepseek-flash
 ```
 
 缺少密钥时，登录和知识库仍可使用，聊天会显示未配置提示。默认模型关闭思考模式。模型配置改变后请新建会话，不自动接续不同模型的历史。
+
+## 开发启动：前后端自动更新（推荐开发时使用）
+
+**终端一：启动后端，开启代码重载和详细日志。**
+
+```powershell
+uv run --locked python -m backend --reload --log-mode detailed
+```
+
+只需要简单日志时，将上面的命令替换为：
+
+```powershell
+uv run --locked python -m backend --reload --log-mode simple
+```
+
+**终端二：启动 Vite 前端。**
+
+```powershell
+npm --prefix frontend run dev
+```
+
+**浏览器打开 http://127.0.0.1:5173/ 。开发时从这个地址进入，不要打开 8000 的旧构建页面。**
+
+- 修改 `frontend/src` 中的 Vue、TypeScript 或 CSS，保存后 Vite 自动更新页面；部分改动会触发整页刷新。
+- 修改 `backend` 中的 Python 文件，Uvicorn 自动重启后端，并保留选定的日志模式；正在生成的聊天可能被中断。
+- 修改 `.env` 或安装新依赖后，手动重启对应服务。
+- Windows 下请在普通终端前台运行 `--reload`，保留控制台输出；本机验证中，无控制台后台运行或将输出重定向到文件会使 Uvicorn 重载卡住。程序已自动写入日志文件，无需额外使用 `>` 重定向。
+- 开发启动无需运行 `npm run build`。如果 5173 被占用，以 Vite 终端实际显示的 Local 地址为准。
+
+前端通过 `/api` 代理连接 8000 后端。代理显式设置 `changeOrigin: false`，保留原始 Host，使浏览器 Origin 与 Host 一致，修复从 5173 登录时“不允许跨站请求”的问题；后端仍拒绝外部来源的写请求。旧 Vite 进程若未自动应用配置，按 `Ctrl+C` 后重新运行前端启动命令。
+
+## 构建后试用：只启动后端
+
+首次使用或前端源码修改后，先构建：
+
+```powershell
+npm --prefix frontend run build
+```
+
+然后启动后端，不需要 Vite：
+
+```powershell
+uv run --locked python -m backend --log-mode simple
+```
+
+打开 http://127.0.0.1:8000/ 。后端同时提供 `frontend/dist` 中的页面和 `/api` 接口；此方式不支持前端热更新。需要详细日志时把 `simple` 改为 `detailed`。当前命令默认仅监听本机，正式部署另行配置。
+
+## 日志模式
+
+通过启动命令选择，不需要修改 `.env` 或数据库。切换模式需停止当前后端再启动。
+
+```powershell
+# 简单模式：默认值，不加参数也一样
+uv run --locked python -m backend --log-mode simple
+
+# 详细模式：记录每次模型调用和工具调用的输入、结果
+uv run --locked python -m backend --log-mode detailed
+```
+
+两种模式均输出控制台和 `data/app/logs/server-时间-模式.txt`（UTF-8），启动时显示具体路径。
+
+| 模式 | 内容 |
+| --- | --- |
+| simple | 请求状态、会话完成与调用次数、错误类型；不记录对话、资料或工具正文。 |
+| detailed | 简单日志，加上框架生成的每次模型请求的指令、历史消息、工具定义和输出，以及工具名称、调用 ID、参数和结果；包含追踪 ID、时间、会话关联和框架提供的用量。 |
+
+详细模式使用 **Pydantic AI 原生 Instrumentation + OpenTelemetry SimpleSpanProcessor / ConsoleSpanExporter**。仅增加本地日志输出适配、中文格式化和密钥脱敏，不自行维护一套模型/工具事件采集逻辑，也不向 Logfire 或其他遥测服务上传。
+
+详细记录在一次调用结束或报错后写入；流式模型输出由框架合并为该次调用结果，不逐个 token 刷日志。它记录的是框架的模型消息与工具调用结构，不是原始 HTTP 抓包，不采集登录密码、Cookie 或认证请求头。
+
+阅读详细日志时：
+
+- `chat 模型名`：`gen_ai.system_instructions`、`gen_ai.input.messages`、`gen_ai.output.messages` 分别对应指令、输入和输出。
+- `execute_tool 工具名`：`gen_ai.tool.call.arguments` 和 `gen_ai.tool.call.result` 对应工具参数与结果。
+- 问问题暂停时会记录 `CallDeferred` 状态；用户稍后回答的结果在续接请求的输入消息中，按工具调用 ID 关联。
+- API 错误可能记录在同一 trace 的 `invoke_agent` 中，包含异常和 HTTP 状态；用 `trace_id` 对应相关模型调用。
+- 跨轮及追问续接按 `gen_ai.conversation.id` 或 Agent `metadata.conversation_id` 查询。
+
+详细日志包含聊天和制度全文，API 密钥会替换为 `[REDACTED]`；日志目录继续由 Git 忽略。原有日志保留，不因切换模式而删除。
 
 ## 测试账号
 
@@ -57,7 +140,7 @@ DEEPSEEK_MODEL=deepseek-flash
 - `tests_stage2/`：第二阶段测试。
 - `data/fixtures/`：三份受 Git 管理的模拟制度，不是正式办事依据。
 - `data/app/banshi.sqlite3`：账号、登录令牌摘要、制度原文、会话与待答问题。
-- `data/app/logs/`：UTF-8 `.txt` 日志；不记录完整模型请求或密钥。
+- `data/app/logs/`：UTF-8 `.txt` 日志；简单模式记录摘要，详细模式记录模型和工具内容，两者均屏蔽 API 密钥。
 
 首次启动直接创建表并初始化账号和模拟制度，不引入数据库迁移。仅首次创建账号时导入模拟制度；修改 fixtures 不会自动覆盖库中内容。
 
@@ -67,21 +150,7 @@ DEEPSEEK_MODEL=deepseek-flash
 
 第一阶段旧源码、测试、匿名身份、JSON 历史和日志已由用户手动删除，并完成目录核实及 Git 清理。当前使用第二阶段入口和数据目录。
 
-## 开发和验证
-
-后端开发：
-
-```powershell
-uv run uvicorn backend.app:create_app --factory --reload --host 127.0.0.1 --port 8000
-```
-
-另开终端运行前端开发服务：
-
-```powershell
-npm --prefix frontend run dev
-```
-
-Vite 将 `/api` 转发到后端。生产构建由后端静态托管；前端改动后需重新构建、刷新页面。
+## 验证命令
 
 ```powershell
 uv run --locked python -m pytest -q

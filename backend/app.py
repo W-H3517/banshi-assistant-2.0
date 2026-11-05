@@ -1,9 +1,7 @@
 import asyncio
-import logging
 import secrets
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlsplit
@@ -20,6 +18,7 @@ from .chat import ChatService, detail, owned
 from .config import ROOT, Settings
 from .db import Conversation, Database, Document, Login, User, check_password
 from .knowledge import search_documents
+from .logging_setup import LoggingRuntime
 
 UserDep = Annotated[User, Depends(current_user)]
 
@@ -39,13 +38,19 @@ def create_app(settings=None, *, agent_factory=create_agent):
 
     @asynccontextmanager
     async def lifespan(app):
+        logs = LoggingRuntime(settings)
         db = Database(settings)
-        await db.initialize()
-        app.state.db = db
-        app.state.chat = ChatService(db, settings, agent_factory)
-        yield
-        await app.state.chat.close()
-        await db.engine.dispose()
+        try:
+            await db.initialize()
+            app.state.db = db
+            app.state.chat = ChatService(db, settings, agent_factory, logs.instrumentation)
+            try:
+                yield
+            finally:
+                await app.state.chat.close()
+        finally:
+            await db.engine.dispose()
+            logs.close()
 
     app = FastAPI(title="办事助手", lifespan=lifespan)
 
@@ -169,13 +174,3 @@ def create_app(settings=None, *, agent_factory=create_agent):
     if frontend.exists():
         app.mount("/", StaticFiles(directory=frontend, html=True), name="frontend")
     return app
-
-
-def configure_logging(settings):
-    directory = settings.data_dir / "logs"
-    directory.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
-                        handlers=[logging.StreamHandler(), logging.FileHandler(
-                            directory / f"server-{datetime.now():%Y%m%d-%H%M%S}.txt",
-                            encoding="utf-8",
-                        )])
