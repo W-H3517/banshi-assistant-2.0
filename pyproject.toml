@@ -1,20 +1,25 @@
 [project]
-name = "office-agent-demo"
+name = "banshi-assistant"
 version = "0.1.0"
-description = "办事助手第一阶段 Agent 验证"
+description = "办事助手：制度知识库与 Agent 对话"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "pydantic-ai-slim[openai]>=1.0",
     "python-dotenv>=1.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite>=0.20",
+    "python-multipart>=0.0.20",
 ]
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-asyncio>=1", "ruff>=0.11"]
+dev = ["pytest>=8", "pytest-asyncio>=1", "ruff>=0.11", "httpx>=0.28"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-testpaths = ["tests"]
+testpaths = ["tests_stage2"]
 
 [tool.ruff]
 target-version = "py312"
