@@ -14,6 +14,7 @@ class Settings:
     api_key: str = field(default="", repr=False)
     model: str = "deepseek-flash"
     log_mode: Literal["simple", "detailed"] = "simple"
+    model_cache_dir: Path = ROOT / "data/models"
 
     @classmethod
     def load(cls):

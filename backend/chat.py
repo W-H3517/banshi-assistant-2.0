@@ -67,6 +67,8 @@ class ChatService:
                 Conversation.id == conversation_id, Conversation.user_id == user.id,
                 Conversation.status == conversation.status,
                 Conversation.updated_at == conversation.updated_at,
+                Conversation.history == conversation.history,
+                Conversation.transcript == conversation.transcript,
             ).values(status="running", error=""))
             await session.commit()
             if reserved.rowcount != 1:
@@ -131,7 +133,8 @@ class ChatService:
                         content = event.part.content
                         if isinstance(content, list):
                             for doc in content:
-                                source = {"id": doc["id"], "title": doc["title"]}
+                                source = {"id": doc["id"], "title": doc["title"],
+                                          "page": doc["page"]}
                                 if source not in assistant["sources"]:
                                     assistant["sources"].append(source)
                                     queue.put_nowait({"type": "source", **source})

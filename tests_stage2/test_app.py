@@ -14,7 +14,8 @@ from backend.agent import create_agent
 from backend.app import create_app
 from backend.chat import ChatService, owned
 from backend.config import Settings
-from backend.db import Conversation, Database, User, now
+from backend.db import Conversation, Database, User
+from tests_stage2.pdf_helpers import make_pdf
 
 
 def login(client, username="admin"):
@@ -46,14 +47,16 @@ def test_login_isolation_upload_and_persistence(tmp_path):
         login(client)
         assert len(client.get("/api/documents").json()) == 3
         document = client.post("/api/documents", files={
-            "file": ("测试制度.md", "# 测试制度\n\n## A1\n打印凭证必须签名。".encode(), "text/markdown"),
+            "file": ("测试制度.pdf", make_pdf(["测试制度\n\nA1\n打印凭证必须签名。"]), "application/pdf"),
         }).json()
-        assert client.get(f"/api/documents/{document['id']}").json()["filename"] == "测试制度.md"
+        assert client.get(f"/api/documents/{document['id']}").json()["filename"] == "测试制度.pdf"
         assert len(client.get("/api/documents?q=凭证 签名").json()) >= 1
         assert client.post("/api/documents", files={"file": ("a.pdf", b"pdf")}).status_code == 422
-        assert client.post("/api/documents", files={"file": ("a.md", b"\xff")}).status_code == 422
-        assert client.post("/api/documents", files={"file": ("a.md", b" ")}).status_code == 422
-        assert client.post("/api/documents", files={"file": ("a.md", b"x" * 262145)}).status_code == 413
+        assert client.post("/api/documents", files={"file": ("a.md", b"# legacy")}).status_code == 422
+        assert client.post("/api/documents", files={"file": ("a.pdf", b"")}).status_code == 422
+        assert client.post("/api/documents", files={
+            "file": ("a.pdf", b"x" * (20 * 1024 * 1024 + 1)),
+        }).status_code == 413
         assert client.post("/api/conversations", headers={"Origin": "https://evil.test"}).status_code == 403
         login(client, "alice")
         conversation = client.post("/api/conversations").json()
@@ -122,6 +125,9 @@ def test_agent_tools_question_resume_and_failure(tmp_path, log_mode, capsys):
         tool_content = json.loads(requests[1]["messages"][-1]["content"])
         assert all("content" in doc and "preview" not in doc for doc in tool_content)
         assert any("450" in doc["content"] for doc in tool_content)
+        assert all(doc["page"] >= 1 and doc["citation"].endswith(f"#page={doc['page']}")
+                   for doc in tool_content)
+        assert all(source["page"] >= 1 for source in paused["transcript"][-1]["sources"])
         assert client.post(path + "/turn", json={"answers": {"fake": "是"}}).status_code == 422
         assert client.post(path + "/turn", json={"prompt": "绕过问题"}).status_code == 422
         login(client, "bob")
@@ -235,7 +241,7 @@ async def test_stale_turn_cannot_replace_newly_completed_history(tmp_path, monke
         async with db.sessions() as session:
             await session.execute(update(Conversation).where(
                 Conversation.id == conversation_id,
-            ).values(transcript=completed, updated_at=now()))
+            ).values(transcript=completed, updated_at=snapshot.updated_at))
             await session.commit()
         return snapshot
 

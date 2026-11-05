@@ -1,10 +1,10 @@
 export interface User { id: string; username: string; name: string; role: string }
-export interface Source { id: string; title: string }
+export interface Source { id: string; title: string; page?: number }
 export interface Tool { id: string; name: string; status: string }
 export interface Message { role: string; text: string; tools?: Tool[]; sources?: Source[] }
 export interface Question { id: string; question: string; options?: string[] | null }
 export interface Conversation { id: string; title: string; status: string; updated_at: string; transcript: Message[]; pending: Question[]; error: string }
-export interface Document extends Source { filename: string; preview?: string; content?: string; created_at: string }
+export interface Document extends Source { filename: string; preview: string; created_at: string; page_count: number; chunk_count: number; match_page?: number }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch('/api' + path, { ...init, headers: init.body instanceof FormData ? init.headers : { 'Content-Type': 'application/json', ...init.headers } })

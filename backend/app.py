@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -17,8 +18,9 @@ from .auth import COOKIE, current_user, digest, public_user
 from .chat import ChatService, detail, owned
 from .config import ROOT, Settings
 from .db import Conversation, Database, Document, Login, User, check_password
-from .knowledge import search_documents
+from .knowledge import DuplicateDocument, KnowledgeBase, public_document
 from .logging_setup import LoggingRuntime
+from .pdf import MAX_FILE_BYTES, InvalidPDF
 
 UserDep = Annotated[User, Depends(current_user)]
 
@@ -43,6 +45,8 @@ def create_app(settings=None, *, agent_factory=create_agent):
         try:
             await db.initialize()
             app.state.db = db
+            db.knowledge = await KnowledgeBase.create(db, settings)
+            await db.knowledge.seed()
             app.state.chat = ChatService(db, settings, agent_factory, logs.instrumentation)
             try:
                 yield
@@ -100,30 +104,30 @@ def create_app(settings=None, *, agent_factory=create_agent):
 
     @app.get("/api/documents")
     async def documents(user: UserDep, q: str = ""):
-        return await search_documents(app.state.db, q)
+        try:
+            return await app.state.db.knowledge.documents(q)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
 
     @app.post("/api/documents", status_code=201)
     async def upload(file: UploadFile, user: UserDep):
         if user.role != "admin":
             raise HTTPException(403, "仅管理员可以上传制度")
         filename = Path((file.filename or "").replace("\\", "/")).name
-        if not filename.lower().endswith(".md"):
-            raise HTTPException(422, "请上传 .md 制度文件")
-        raw = await file.read(256 * 1024 + 1)
-        if len(raw) > 256 * 1024:
-            raise HTTPException(413, "单份制度不能超过 256 KB")
+        if not filename.lower().endswith(".pdf"):
+            raise HTTPException(422, "请上传文字版 .pdf 制度文件")
+        raw = await file.read(MAX_FILE_BYTES + 1)
+        if len(raw) > MAX_FILE_BYTES:
+            raise HTTPException(413, "单份 PDF 不能超过 20 MB")
         try:
-            content = raw.decode("utf-8-sig").strip()
-        except UnicodeDecodeError:
-            raise HTTPException(422, "请使用 UTF-8 编码") from None
-        if not content:
-            raise HTTPException(422, "文件内容不能为空")
-        document = Document(title=content.splitlines()[0].lstrip("# ")[:160] or filename,
-                            filename=filename, content=content, uploaded_by=user.id)
-        async with app.state.db.sessions() as session:
-            session.add(document)
-            await session.commit()
-        return {"id": document.id, "title": document.title}
+            return await app.state.db.knowledge.upload(filename, raw, user.id)
+        except DuplicateDocument as exc:
+            raise HTTPException(409, str(exc)) from None
+        except InvalidPDF as exc:
+            raise HTTPException(422, str(exc)) from None
+        except Exception:
+            logging.getLogger(__name__).exception("PDF 索引失败，上传未提交")
+            raise HTTPException(503, "PDF 解析或索引失败，文件未入库，请稍后重试") from None
 
     @app.get("/api/documents/{document_id}")
     async def document(document_id: str, user: UserDep):
@@ -131,8 +135,18 @@ def create_app(settings=None, *, agent_factory=create_agent):
             doc = await session.get(Document, document_id)
         if doc is None:
             raise HTTPException(404, "制度不存在")
-        return {"id": doc.id, "title": doc.title, "filename": doc.filename,
-                "content": doc.content, "created_at": doc.created_at}
+        return public_document(doc)
+
+    @app.get("/api/documents/{document_id}/file")
+    async def original_pdf(document_id: str, user: UserDep):
+        async with app.state.db.sessions() as session:
+            raw = await session.scalar(select(Document.original).where(Document.id == document_id))
+        if raw is None:
+            raise HTTPException(404, "制度不存在")
+        return Response(raw, media_type="application/pdf", headers={
+            "Content-Disposition": 'inline; filename="document.pdf"',
+            "X-Content-Type-Options": "nosniff",
+        })
 
     @app.get("/api/conversations")
     async def conversations(user: UserDep):

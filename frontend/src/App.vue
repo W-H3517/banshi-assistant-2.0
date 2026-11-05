@@ -18,6 +18,8 @@ const documents = ref<Document[]>([])
 const search = ref('')
 const selectedDocument = ref<Document | null>(null)
 const documentOpen = ref(false)
+const documentPage = ref(1)
+const pdfUrl = computed(() => selectedDocument.value ? `/api/documents/${selectedDocument.value.id}/file#page=${documentPage.value}` : '')
 const draft = ref('')
 const sending = ref(false)
 const uploading = ref(false)
@@ -68,8 +70,12 @@ function newChat() {
   current.value = null; draft.value = ''; answerValues.value = {}; page.value = 'chat'; mobileOpen.value = false
 }
 async function scrollDown() { await nextTick(); scrollArea.value?.scrollTo({ top: scrollArea.value.scrollHeight }) }
-async function openDocument(id: string) {
-  await guard(async () => { selectedDocument.value = await api<Document>(`/documents/${id}`); documentOpen.value = true })
+async function openDocument(id: string, page = 1) {
+  await guard(async () => {
+    selectedDocument.value = await api<Document>(`/documents/${id}`)
+    documentPage.value = Math.max(1, Math.min(page, selectedDocument.value.page_count))
+    documentOpen.value = true
+  })
 }
 async function upload(event: Event) {
   const input = event.target as HTMLInputElement
@@ -78,7 +84,7 @@ async function upload(event: Event) {
   try {
     const data = new FormData(); data.append('file', file)
     await api('/documents', { method: 'POST', body: data })
-    search.value = ''; await loadDocuments(); ElMessage.success('制度已加入知识库')
+    search.value = ''; await loadDocuments(); ElMessage.success('PDF 已完成解析和索引，可以查询了')
   } catch (error) { showError(error) }
   finally { uploading.value = false; input.value = '' }
 }
@@ -183,7 +189,7 @@ onUnmounted(() => window.removeEventListener('session-expired', clearSession))
               <div v-if="message.role === 'assistant'" class="assistant-avatar">办</div><div class="message-body"><span class="message-author">{{ message.role === 'user' ? '你' : '办事助手' }}</span>
                 <div v-if="message.tools?.length" class="tool-row"><span v-for="tool in message.tools" :key="tool.id" class="tool-chip"><i :class="tool.status"></i>{{ tool.name === 'ask_question' ? '问问题' : '查资料' }} · {{ tool.status === 'running' ? '进行中' : tool.status === 'waiting' ? '待回答' : '已完成' }}</span></div>
                 <Markdown v-if="message.role === 'assistant' && message.text" :text="message.text" @document="openDocument" /><p v-else-if="message.role === 'user'" class="user-text">{{ message.text }}</p><div v-else-if="busy && index === messages.length - 1" class="thinking">正在思考<span>…</span></div>
-                <div v-if="message.sources?.length" class="source-row"><span>查阅资料</span><button v-for="source in message.sources" :key="source.id" @click="openDocument(source.id)"><el-icon><DocumentIcon /></el-icon>{{ source.title }}</button></div>
+                <div v-if="message.sources?.length" class="source-row"><span>查阅资料</span><button v-for="source in message.sources" :key="`${source.id}-${source.page}`" @click="openDocument(source.id, source.page)"><el-icon><DocumentIcon /></el-icon>{{ source.title }} · 第 {{ source.page }} 页</button></div>
               </div>
             </article>
             <div v-if="current?.pending.length && !sending" class="question-card"><div class="question-heading">补充一点信息，继续办理</div><div v-for="question in current.pending" :key="question.id" class="question-item"><label :for="question.id">{{ question.question }}</label><div class="question-options"><button v-for="option in question.options || []" :key="option" :class="{ chosen: answerValues[question.id] === option }" @click="answerValues[question.id] = option">{{ option }}</button></div><el-input :id="question.id" v-model="answerValues[question.id]" placeholder="也可以直接输入你的回答" :maxlength="12000" /></div><el-button type="primary" :disabled="!readyAnswers || !modelReady" @click="send()">提交回答并继续 <el-icon><ArrowRight /></el-icon></el-button></div>
@@ -192,12 +198,12 @@ onUnmounted(() => window.removeEventListener('session-expired', clearSession))
         </div>
         <div class="composer-area"><div v-if="busy" class="generation-status"><span>正在处理你的问题…</span><el-button size="small" @click="guard(stop)">停止生成</el-button></div><div v-else-if="current && statusLabel[current.status]" class="generation-status"><span>{{ statusLabel[current.status] }}</span></div><div class="composer" :class="{ disabled: busy || Boolean(current?.pending.length) }"><textarea v-model="draft" aria-label="输入办事问题" :disabled="busy || Boolean(current?.pending.length) || !modelReady" :placeholder="current?.pending.length ? '请先回答上方问题' : '输入你想了解的事项…'" rows="2" maxlength="12000" @keydown="composerKey"></textarea><div class="composer-bottom"><span>基于制度回答 · 支持继续追问</span><el-button type="primary" :disabled="!draft.trim() || busy || Boolean(current?.pending.length) || !modelReady" :icon="ArrowRight" aria-label="发送消息" @click="send()" /></div></div><p class="composer-note">回答仅供参考，请以制度原文为准。初始三份制度为模拟资料。</p></div>
       </section>
-      <section v-else class="knowledge-page"><div class="page-heading"><div><p class="eyebrow">KNOWLEDGE BASE</p><h1>制度知识库</h1><p class="muted">查找制度、查看原文，让每一步都有依据。</p></div><el-button v-if="user.role === 'admin'" type="primary" :icon="Upload" :loading="uploading" @click="fileInput?.click()">上传制度</el-button><input ref="fileInput" type="file" accept=".md" hidden @change="upload" /></div>
-        <div class="knowledge-toolbar"><el-input v-model="search" placeholder="搜索制度名称或内容关键词" :prefix-icon="Search" clearable @keyup.enter="guard(loadDocuments)" @clear="guard(loadDocuments)" /><el-button @click="guard(loadDocuments)">搜索</el-button><span>{{ documents.length }} 份制度</span></div>
-        <div v-if="documents.length" class="document-grid"><button v-for="doc in documents" :key="doc.id" class="document-card" @click="openDocument(doc.id)"><div class="document-card-top"><span class="file-icon"><el-icon><DocumentIcon /></el-icon></span><span class="file-type">MARKDOWN</span></div><h3>{{ doc.title }}</h3><p>{{ doc.preview?.replace(/[#*]/g, '') }}</p><div class="document-card-footer"><span>{{ doc.filename }}</span><span>查看原文 ↗</span></div></button></div><el-empty v-else description="没有找到匹配的制度，试试其他关键词" />
-        <p class="knowledge-note">{{ user.role === 'admin' ? '支持 UTF-8 编码的 .md 文件，单份不超过 256 KB；上传后部门成员即可查询。' : '制度由管理员维护，所有登录成员均可查询。' }}</p>
+      <section v-else class="knowledge-page"><div class="page-heading"><div><p class="eyebrow">KNOWLEDGE BASE</p><h1>制度知识库</h1><p class="muted">查找制度、查看原文，让每一步都有依据。</p></div><el-button v-if="user.role === 'admin'" type="primary" :icon="Upload" :loading="uploading" @click="fileInput?.click()">{{ uploading ? '正在解析并建立索引…' : '上传 PDF' }}</el-button><input ref="fileInput" type="file" accept=".pdf,application/pdf" hidden @change="upload" /></div>
+        <div class="knowledge-toolbar"><el-input v-model="search" placeholder="输入问题或关键词搜索制度" maxlength="300" :prefix-icon="Search" clearable @keyup.enter="guard(loadDocuments)" @clear="guard(loadDocuments)" /><el-button @click="guard(loadDocuments)">搜索</el-button><span>{{ documents.length }} 份制度</span></div>
+        <div v-if="documents.length" class="document-grid"><button v-for="doc in documents" :key="doc.id" class="document-card" @click="openDocument(doc.id, doc.match_page)"><div class="document-card-top"><span class="file-icon"><el-icon><DocumentIcon /></el-icon></span><span class="file-type">PDF · {{ doc.page_count }} 页</span></div><h3>{{ doc.title }}</h3><p>{{ doc.preview }}</p><div class="document-card-footer"><span>{{ doc.filename }}</span><span>查看原文 ↗</span></div></button></div><el-empty v-else description="没有找到匹配的制度，试试其他关键词" />
+        <p class="knowledge-note">{{ user.role === 'admin' ? '支持可复制文字的 PDF，单份不超过 20 MB、200 页；暂不支持扫描件和加密文件。解析完成后即可查询。' : '制度由管理员维护，所有登录成员均可查询。' }}</p>
       </section>
     </main>
-    <el-drawer v-model="documentOpen" :title="selectedDocument?.title || '制度原文'" size="min(680px, 100vw)"><div v-if="selectedDocument" class="document-reader"><div class="reader-meta"><span>{{ selectedDocument.filename }}</span><el-tag size="small" effect="plain">制度原文</el-tag></div><Markdown :text="selectedDocument.content || ''" @document="openDocument" /></div></el-drawer>
+    <el-drawer v-model="documentOpen" :title="selectedDocument?.title || '制度原文'" size="min(980px, 100vw)" destroy-on-close><div v-if="selectedDocument" class="document-reader"><div class="reader-meta"><span>{{ selectedDocument.filename }}</span><el-tag size="small" effect="plain">制度原文</el-tag></div><div class="pdf-controls"><span>定位到第</span><el-input-number v-model="documentPage" :min="1" :max="selectedDocument.page_count" :precision="0" size="small" aria-label="PDF 页码" /><span>页 / 共 {{ selectedDocument.page_count }} 页</span><a :href="pdfUrl" target="_blank" rel="noopener noreferrer">新窗口打开原文 ↗</a></div><iframe :key="pdfUrl" :src="pdfUrl" class="pdf-frame" title="制度 PDF 原文"></iframe><p class="knowledge-note">引用使用 PDF 物理页码。若内嵌预览不可用，请在新窗口打开原文。</p></div></el-drawer>
   </div>
 </template>

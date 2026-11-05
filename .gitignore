@@ -23,6 +23,7 @@ venv/
 
 # Stage 2 local data and frontend
 data/app/
+data/models/
 node_modules/
 frontend/dist/
 *.tsbuildinfo

@@ -4,11 +4,11 @@ import secrets
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import JSON, ForeignKey, String, Text, event, select, update
+from sqlalchemy import JSON, ForeignKey, LargeBinary, String, Text, event, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from .config import ROOT, Settings
+from .config import Settings
 
 
 def uid():
@@ -54,9 +54,23 @@ class Document(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     title: Mapped[str]
     filename: Mapped[str]
-    content: Mapped[str] = mapped_column(Text)
+    sha256: Mapped[str] = mapped_column(String, unique=True)
+    page_count: Mapped[int]
+    chunk_count: Mapped[int]
+    preview: Mapped[str]
+    original: Mapped[bytes] = mapped_column(LargeBinary, deferred=True)
     created_at: Mapped[str] = mapped_column(default=now)
     uploaded_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+
+
+class Chunk(Base):
+    __tablename__ = "chunks"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), index=True)
+    page: Mapped[int]
+    ordinal: Mapped[int]
+    content: Mapped[str] = mapped_column(Text)
+    vector: Mapped[bytes] = mapped_column(LargeBinary)
 
 
 class Conversation(Base):
@@ -104,12 +118,6 @@ class Database:
                              ("bob", "员工小陈", "employee"),
                          ]]
                 session.add_all(users)
-                await session.flush()
-                for path in sorted((ROOT / "data/fixtures").glob("*.md")):
-                    content = path.read_text(encoding="utf-8")
-                    session.add(Document(title=content.splitlines()[0].lstrip("# "),
-                                         filename=path.name, content=content,
-                                         uploaded_by=users[0].id))
             await session.execute(update(Conversation).where(
                 Conversation.status == "running"
             ).values(status="interrupted", error="服务重启中断了生成，请重新发送或继续回答。"))
