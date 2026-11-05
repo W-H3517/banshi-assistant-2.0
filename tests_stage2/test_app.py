@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.deepseek import DeepSeekProvider
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from backend.agent import create_agent
 from backend.app import create_app
@@ -96,6 +96,8 @@ def test_agent_tools_question_resume_and_failure(tmp_path, log_mode, capsys):
             return tool("search_documents", {"query": "培训"}, "search1")
         if len(requests) == 2:
             return tool("ask_question", {"question": "是否外地培训？", "options": ["是", "否"]}, "ask1")
+        if len(requests) == 4:
+            return tool("search_documents", {"query": "外地培训报销材料"}, "search2")
         return sse({"role": "assistant", "content": "请准备培训通知和发票。"})
 
     clients = []
@@ -148,6 +150,8 @@ def test_agent_tools_question_resume_and_failure(tmp_path, log_mode, capsys):
         restored = client.get(path).json()
         assert restored["status"] == "idle" and not restored["pending"]
         assert restored["transcript"][-1]["text"] == "请准备培训通知和发票。"
+        assert restored["transcript"][-1]["sources"]
+        assert any(item.get("tool_call_id") == "search2" for item in requests[-1]["messages"])
         assert any(item.get("tool_call_id") == "ask1" and item["content"] == "是"
                    for item in requests[-1]["messages"])
         client.post(path + "/turn", json={"prompt": "再说一遍"})
@@ -220,39 +224,4 @@ async def test_stop_and_concurrent_turn_protect_history(tmp_path):
     assert saved.status == "interrupted"
     assert saved.transcript == [{"role": "assistant", "text": "已保存"}]
     assert saved.history == []
-    await db.engine.dispose()
-
-
-async def test_stale_turn_cannot_replace_newly_completed_history(tmp_path, monkeypatch):
-    settings = Settings(data_dir=tmp_path, api_key="test-key")
-    db = Database(settings)
-    await db.initialize()
-    async with db.sessions() as session:
-        user = await session.scalar(select(User).where(User.username == "alice"))
-        conversation = Conversation(user_id=user.id, model=settings.model)
-        session.add(conversation)
-        await session.commit()
-
-    completed = [{"role": "assistant", "text": "另一轮刚刚保存的回答"}]
-
-    async def read_then_complete(db, conversation_id, user_id):
-        snapshot = await owned(db, conversation_id, user_id)
-        # 模拟读取快照后、抢占生成状态前，另一请求完成并保存了新历史。
-        async with db.sessions() as session:
-            await session.execute(update(Conversation).where(
-                Conversation.id == conversation_id,
-            ).values(transcript=completed, updated_at=snapshot.updated_at))
-            await session.commit()
-        return snapshot
-
-    monkeypatch.setattr("backend.chat.owned", read_then_complete)
-    service = ChatService(db, settings)
-    from fastapi import HTTPException
-    with pytest.raises(HTTPException) as exc:
-        await service.start(user, conversation.id, "并发请求", {})
-    assert exc.value.status_code == 409
-    saved = await owned(db, conversation.id, user.id)
-    assert saved.transcript == completed
-    assert saved.status == "idle"
-    assert not service.tasks
     await db.engine.dispose()

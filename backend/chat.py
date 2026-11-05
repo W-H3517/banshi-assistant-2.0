@@ -46,39 +46,81 @@ class ChatService:
         self.db, self.settings, self.agent_factory = db, settings, agent_factory
         self.tasks = {}
         self.instrumentation = instrumentation
+        self.lifecycle_lock = asyncio.Lock()
 
-    async def start(self, user, conversation_id, prompt, answers):
-        conversation = await owned(self.db, conversation_id, user.id)
-        if conversation.status == "running":
-            raise HTTPException(409, "当前会话正在生成")
-        if conversation.model != self.settings.model:
-            raise HTTPException(409, "会话模型与配置不同，请新建会话")
-        if conversation.pending:
-            if prompt or set(answers) != {item["id"] for item in conversation.pending}:
-                raise HTTPException(422, "请回答当前全部问题后继续")
-            if not all(answer.strip() for answer in answers.values()):
-                raise HTTPException(422, "回答不能为空")
-        elif not prompt.strip() or answers:
-            raise HTTPException(422, "请输入消息；当前没有待回答的工具问题")
-        if not self.settings.api_key:
-            raise HTTPException(503, "模型密钥尚未配置，资料库仍可使用")
-        async with self.db.sessions() as session:
+    async def reserve(self, user, conversation_id, prompt, answers):
+        # 新事务内先条件更新，再读历史与校验；异常自动回滚占用状态。
+        async with self.db.sessions.begin() as session:
             reserved = await session.execute(update(Conversation).where(
                 Conversation.id == conversation_id, Conversation.user_id == user.id,
-                Conversation.status == conversation.status,
-                Conversation.updated_at == conversation.updated_at,
-                Conversation.history == conversation.history,
-                Conversation.transcript == conversation.transcript,
+                Conversation.status.in_(["idle", "waiting", "failed", "interrupted"]),
             ).values(status="running", error=""))
-            await session.commit()
             if reserved.rowcount != 1:
-                raise HTTPException(409, "会话状态已更新，请刷新后重试")
-        queue = asyncio.Queue()
-        task = asyncio.create_task(self.run(user, conversation, prompt, answers, queue))
-        self.tasks[conversation_id] = task
-        return self.stream(conversation_id, task, queue)
+                exists = await session.scalar(select(Conversation.id).where(
+                    Conversation.id == conversation_id, Conversation.user_id == user.id,
+                ))
+                if exists is None:
+                    raise HTTPException(404, "会话不存在")
+                raise HTTPException(409, "当前会话正在生成")
+            conversation = await session.get(Conversation, conversation_id)
+            task = self.tasks.get(conversation_id)
+            if task is not None and not task.done():
+                raise HTTPException(409, "上一轮正在收尾，请稍后重试")
+            if conversation.model != self.settings.model:
+                raise HTTPException(409, "会话模型与配置不同，请新建会话")
+            if conversation.pending:
+                if prompt or set(answers) != {item["id"] for item in conversation.pending}:
+                    raise HTTPException(422, "请回答当前全部问题后继续")
+                if not all(answer.strip() for answer in answers.values()):
+                    raise HTTPException(422, "回答不能为空")
+            elif not prompt.strip() or answers:
+                raise HTTPException(422, "请输入消息；当前没有待回答的工具问题")
+            if not self.settings.api_key:
+                raise HTTPException(503, "模型密钥尚未配置，资料库仍可使用")
+        return conversation
 
-    async def stream(self, conversation_id, task, queue):
+    async def start(self, user, conversation_id, prompt, answers):
+        # 请求断开不能把已提交的占用遗留在任务登记之前。
+        startup = asyncio.create_task(self.launch(user, conversation_id, prompt, answers))
+        try:
+            task, queue = await asyncio.shield(startup)
+        except asyncio.CancelledError:
+            with suppress(Exception):
+                task, queue = await startup
+                await self.cancel(task)
+            raise
+        return self.stream(task, queue)
+
+    async def launch(self, user, conversation_id, prompt, answers):
+        # 只串行化启动/停止的短过程，不在模型和工具运行期间持锁。
+        async with self.lifecycle_lock:
+            conversation = await self.reserve(user, conversation_id, prompt, answers)
+            queue = asyncio.Queue()
+            started = asyncio.Event()
+            coroutine = self.run(user, conversation, prompt, answers, queue, started)
+            try:
+                task = asyncio.create_task(coroutine)
+            except Exception:
+                coroutine.close()
+                await self.fail(conversation, "生成任务启动失败，请重试。", "failed")
+                raise
+            self.tasks[conversation_id] = task
+            task.add_done_callback(lambda finished: self.forget(conversation_id, finished))
+            # 确保任务进入异常清理范围，才允许 stop 取消它。
+            await started.wait()
+            return task, queue
+
+    def forget(self, conversation_id, task):
+        if self.tasks.get(conversation_id) is task:
+            self.tasks.pop(conversation_id)
+
+    async def cancel(self, task):
+        if not task.done() and not task.cancelling():
+            task.cancel()
+        with suppress(asyncio.CancelledError):
+            await asyncio.shield(task)
+
+    async def stream(self, task, queue):
         try:
             while True:
                 try:
@@ -90,14 +132,24 @@ class ChatService:
                     break
                 yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
         finally:
-            if not task.done():
-                task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
-            if self.tasks.get(conversation_id) is task:
-                self.tasks.pop(conversation_id)
+            await self.cancel(task)
 
-    async def run(self, user, conversation, prompt, answers, queue):
+    async def run(self, user, conversation, prompt, answers, queue, started):
+        try:
+            started.set()
+            await self.generate(user, conversation, prompt, answers, queue)
+        except asyncio.CancelledError:
+            await self.fail(conversation, "已停止生成，未完成内容未写入历史。", "interrupted")
+            queue.put_nowait({"type": "error", "message": "已停止生成"})
+        except Exception as exc:  # noqa: BLE001 -- SSE 边界不回显敏感异常正文。
+            logger.error("conversation=%s failed type=%s", conversation.id, type(exc).__name__)
+            message = f"生成失败（{type(exc).__name__}），已保存的历史保持不变。"
+            await self.fail(conversation, message, "failed")
+            queue.put_nowait({"type": "error", "message": message})
+        finally:
+            queue.put_nowait(None)
+
+    async def generate(self, user, conversation, prompt, answers, queue):
         transcript = deepcopy(conversation.transcript)
         assistant = {"role": "assistant", "text": "", "tools": [], "sources": []}
         if answers:
@@ -142,65 +194,61 @@ class ChatService:
                     assistant["text"] += text
                     queue.put_nowait({"type": "delta", "text": text})
 
+        agent = self.agent_factory(self.settings, user.id, self.db)
+        usage = RunUsage(requests=conversation.requests if answers else 0)
+        result = await agent.run(
+            None if answers else prompt,
+            message_history=ModelMessagesTypeAdapter.validate_python(conversation.history),
+            deferred_tool_results=DeferredToolResults(calls=answers) if answers else None,
+            event_stream_handler=events, usage=usage, usage_limits=UsageLimits(request_limit=8),
+            conversation_id=conversation.id,
+            metadata={"conversation_id": conversation.id, "user_id": user.id},
+            capabilities=[Instrumentation(settings=self.instrumentation)]
+            if self.instrumentation else [],
+        )
+        pending = []
+        if isinstance(result.output, DeferredToolRequests):
+            pending = [{"id": call.tool_call_id, **call.args_as_dict()}
+                       for call in result.output.calls]
+            for tool in assistant["tools"]:
+                if tool["name"] == "ask_question":
+                    tool["status"] = "waiting"
+        elif not assistant["text"]:
+            assistant["text"] = result.output
+        transcript.append(assistant)
+        await self.save(conversation.id, {
+            "history": json.loads(result.all_messages_json()), "transcript": transcript,
+            "pending": pending, "status": "waiting" if pending else "idle", "error": "",
+            "requests": usage.requests if pending else 0, "updated_at": now(),
+            "title": prompt[:30] if conversation.title == "新对话" else conversation.title,
+        })
+        queue.put_nowait({"type": "done"})
+        logger.info("conversation=%s completed requests=%s", conversation.id, usage.requests)
+
+    async def save(self, conversation_id, values):
+        # 成功、失败和停止均完整落盘；后来的取消不能打断收尾事务。
+        saving = asyncio.create_task(self.write_result(conversation_id, values))
         try:
-            agent = self.agent_factory(self.settings, user.id, self.db)
-            usage = RunUsage(requests=conversation.requests if answers else 0)
-            result = await agent.run(
-                None if answers else prompt,
-                message_history=ModelMessagesTypeAdapter.validate_python(conversation.history),
-                deferred_tool_results=DeferredToolResults(calls=answers) if answers else None,
-                event_stream_handler=events, usage=usage, usage_limits=UsageLimits(request_limit=8),
-                conversation_id=conversation.id,
-                metadata={"conversation_id": conversation.id, "user_id": user.id},
-                capabilities=[Instrumentation(settings=self.instrumentation)]
-                if self.instrumentation else [],
-            )
-            pending = []
-            if isinstance(result.output, DeferredToolRequests):
-                pending = [{"id": call.tool_call_id, **call.args_as_dict()}
-                           for call in result.output.calls]
-                for tool in assistant["tools"]:
-                    if tool["name"] == "ask_question":
-                        tool["status"] = "waiting"
-            elif not assistant["text"]:
-                assistant["text"] = result.output
-            transcript.append(assistant)
-            async with self.db.sessions() as session:
-                await session.execute(update(Conversation).where(
-                    Conversation.id == conversation.id,
-                ).values(
-                    history=json.loads(result.all_messages_json()), transcript=transcript,
-                    pending=pending, status="waiting" if pending else "idle", error="",
-                    requests=usage.requests if pending else 0, updated_at=now(),
-                    title=prompt[:30] if conversation.title == "新对话" else conversation.title,
-                ))
-                await session.commit()
-            queue.put_nowait({"type": "done"})
-            logger.info("conversation=%s completed requests=%s", conversation.id, usage.requests)
+            await asyncio.shield(saving)
         except asyncio.CancelledError:
-            await self.fail(conversation, "已停止生成，未完成内容未写入历史。", "interrupted")
-            queue.put_nowait({"type": "error", "message": "已停止生成"})
-        except Exception as exc:  # noqa: BLE001 -- SSE 边界必须落盘失败状态，不回显敏感异常正文。
-            logger.error("conversation=%s failed type=%s", conversation.id, type(exc).__name__)
-            message = f"生成失败（{type(exc).__name__}），已保存的历史保持不变。"
-            await self.fail(conversation, message, "failed")
-            queue.put_nowait({"type": "error", "message": message})
-        finally:
-            queue.put_nowait(None)
+            await saving
+
+    async def write_result(self, conversation_id, values):
+        async with self.db.sessions.begin() as session:
+            await session.execute(update(Conversation).where(
+                Conversation.id == conversation_id,
+            ).values(**values))
 
     async def fail(self, conversation, message, status):
-        async with self.db.sessions() as session:
-            await session.execute(update(Conversation).where(
-                Conversation.id == conversation.id,
-            ).values(status="waiting" if conversation.pending else status, error=message))
-            await session.commit()
+        await self.save(conversation.id, {
+            "status": "waiting" if conversation.pending else status, "error": message,
+        })
 
     async def stop(self, conversation_id):
-        task = self.tasks.get(conversation_id)
+        async with self.lifecycle_lock:
+            task = self.tasks.get(conversation_id)
         if task:
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
+            await self.cancel(task)
 
     async def close(self):
         for conversation_id in list(self.tasks):
