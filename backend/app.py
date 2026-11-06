@@ -17,10 +17,12 @@ from .agent import create_agent
 from .auth import COOKIE, current_user, digest, public_user
 from .chat import ChatService, detail, owned
 from .config import ROOT, Settings
-from .db import Conversation, Database, Document, Login, User, check_password
+from .db import Chunk, Conversation, Database, Document, Login, User, check_password
+from .document_preview import convert_pdf, preview_document
 from .knowledge import DuplicateDocument, KnowledgeBase, public_document
 from .logging_setup import LoggingRuntime
 from .pdf import MAX_FILE_BYTES, InvalidPDF
+from .reference_preview import trace_references
 
 UserDep = Annotated[User, Depends(current_user)]
 
@@ -158,6 +160,51 @@ def create_app(settings=None, *, agent_factory=create_agent):
         if doc is None:
             raise HTTPException(404, "制度不存在")
         return public_document(doc)
+
+    @app.get("/api/documents/{document_id}/conversion-preview")
+    async def conversion_preview(document_id: str, user: UserDep):
+        if user.role != "admin":
+            raise HTTPException(403, "仅管理员可以查看转换与切分预览")
+        async with app.state.db.sessions() as session:
+            doc = await session.get(Document, document_id)
+            if doc is None:
+                raise HTTPException(404, "制度不存在")
+            raw = await session.scalar(select(Document.original).where(Document.id == document_id))
+            old = [{"ordinal": chunk.ordinal, "pages": [chunk.page], "content": chunk.content}
+                   for chunk in await session.scalars(select(Chunk).where(
+                       Chunk.document_id == document_id).order_by(Chunk.ordinal))]
+        try:
+            result = await asyncio.to_thread(
+                preview_document, raw, doc.title, app.state.db.knowledge.embeddings,
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("制度转换预览失败 document_id=%s", document_id)
+            raise HTTPException(503, "转换预览失败，现有资料和检索索引未改变") from None
+        return {**result, "document": public_document(doc), "current_chunks": old}
+
+    @app.get("/api/documents/{document_id}/reference-preview")
+    async def reference_preview(document_id: str, section_id: int, user: UserDep):
+        if user.role != "admin":
+            raise HTTPException(403, "仅管理员可以查看引用追查")
+        async with app.state.db.sessions() as session:
+            rows = (await session.execute(select(
+                Document.id, Document.title, Document.page_count, Document.original,
+            ))).all()
+        if document_id not in {row.id for row in rows}:
+            raise HTTPException(404, "制度不存在")
+
+        def build():
+            docs = [{"id": row.id, "title": row.title, "page_count": row.page_count,
+                     "sections": convert_pdf(row.original)["sections"]} for row in rows]
+            return trace_references(docs, document_id, section_id)
+
+        try:
+            return await asyncio.to_thread(build)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        except Exception:
+            logging.getLogger(__name__).exception("引用追查预览失败 document_id=%s", document_id)
+            raise HTTPException(503, "引用追查失败，现有资料和索引未改变") from None
 
     @app.get("/api/documents/{document_id}/file")
     async def original_pdf(document_id: str, user: UserDep):
