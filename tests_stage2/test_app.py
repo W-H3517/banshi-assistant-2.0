@@ -14,7 +14,7 @@ from backend.agent import create_agent
 from backend.app import create_app
 from backend.chat import ChatService, owned
 from backend.config import Settings
-from backend.db import Conversation, Database, User
+from backend.db import Chunk, Conversation, Database, SeedImport, User
 from tests_stage2.pdf_helpers import make_pdf
 
 
@@ -75,6 +75,107 @@ def test_login_isolation_upload_and_persistence(tmp_path):
         assert client.get(path).status_code == 200
         assert len(client.get("/api/documents").json()) == 4
         assert client.post(path + "/turn", json={"prompt": "你好"}).status_code == 503
+
+
+def test_delete_documents_permissions_indexes_and_restart(tmp_path):
+    settings = Settings(data_dir=tmp_path)
+    with TestClient(create_app(settings)) as client:
+        login(client)
+        initial = client.get("/api/documents").json()
+        conversation = client.post("/api/conversations").json()
+        transcript = [{"role": "assistant", "text": (
+            f"历史回答 [制度，第 1 页](/api/documents/{initial[0]['id']}#page=1)"
+        ), "sources": [{"id": initial[0]["id"], "title": initial[0]["title"], "page": 1}]}]
+
+        async def save_history():
+            async with client.app.state.db.sessions() as session:
+                row = await session.get(Conversation, conversation["id"])
+                row.transcript = transcript
+                await session.commit()
+        client.portal.call(save_history)
+        uploaded = client.post("/api/documents", files={
+            "file": ("保留.pdf", make_pdf(["真实测试制度\n保留这份资料。"]), "application/pdf"),
+        }).json()
+        path = f"/api/documents/{initial[0]['id']}"
+        client.post("/api/logout")
+        assert client.delete(path).status_code == 401
+        login(client, "alice")
+        assert client.delete(path).status_code == 403
+        login(client)
+        for doc in initial:
+            assert client.delete(f"/api/documents/{doc['id']}").status_code == 200
+        assert client.delete(path).status_code == 404
+        assert client.get(path).status_code == 404
+        assert client.get(path + "/file").status_code == 404
+        assert client.get(f"/api/conversations/{conversation['id']}").json()["transcript"] == transcript
+
+        async def check_indexes():
+            async with client.app.state.db.sessions() as session:
+                assert not list(await session.scalars(select(Chunk).where(
+                    Chunk.document_id.in_([doc['id'] for doc in initial]),
+                )))
+            assert await client.app.state.db.knowledge.search("报销") == []
+        client.portal.call(check_indexes)
+    with TestClient(create_app(settings)) as client:
+        login(client)
+        assert [d["id"] for d in client.get("/api/documents").json()] == [uploaded["id"]]
+        assert client.get(f"/api/documents/{uploaded['id']}/file").status_code == 200
+
+
+def test_reset_demo_clears_all_users_and_documents_atomically(tmp_path, monkeypatch):
+    settings = Settings(data_dir=tmp_path)
+    with TestClient(create_app(settings)) as client:
+        endpoint = "/api/admin/reset-demo"
+        assert client.post(endpoint).status_code == 401
+        login(client, "alice")
+        alice_chat = client.post("/api/conversations").json()["id"]
+        assert client.post(endpoint).status_code == 403
+        login(client)
+        admin_chat = client.post("/api/conversations").json()["id"]
+        uploaded = client.post("/api/documents", files={
+            "file": ("真实制度.pdf", make_pdf(["真实制度\n保留到重置成功。"]), "application/pdf"),
+        }).json()
+        before = client.get("/api/documents").json()
+        embeddings = client.app.state.db.knowledge.embeddings
+
+        def fail(*args):
+            raise RuntimeError("模拟索引失败")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(embeddings, "passages", fail)
+            assert client.post(endpoint).status_code == 503
+        assert client.get("/api/documents").json() == before
+        assert client.get(f"/api/conversations/{admin_chat}").status_code == 200
+        assert client.post(endpoint).json() == {"ok": True, "document_count": 3}
+        assert client.get("/api/conversations").json() == []
+        assert client.get(f"/api/documents/{uploaded['id']}/file").status_code == 404
+        docs = client.get("/api/documents").json()
+        assert {doc["filename"] for doc in docs} == {"travel.pdf", "training.pdf", "purchase.pdf"}
+        login(client, "alice")
+        assert client.get("/api/conversations").json() == []
+        assert client.get(f"/api/conversations/{alice_chat}").status_code == 404
+    with TestClient(create_app(settings)) as client:
+        login(client)
+        assert client.get("/api/documents").json() == docs
+
+
+def test_existing_database_records_seed_imports_without_duplicates(tmp_path):
+    settings = Settings(data_dir=tmp_path)
+    with TestClient(create_app(settings)) as client:
+        login(client)
+        initial = client.get("/api/documents").json()
+
+        async def remove_new_table():
+            async with client.app.state.db.engine.begin() as connection:
+                await connection.run_sync(SeedImport.__table__.drop)
+        client.portal.call(remove_new_table)
+    with TestClient(create_app(settings)) as client:
+        login(client)
+        assert client.get("/api/documents").json() == initial
+        assert client.delete(f"/api/documents/{initial[0]['id']}").status_code == 200
+    with TestClient(create_app(settings)) as client:
+        login(client)
+        assert len(client.get("/api/documents").json()) == 2
 
 
 @pytest.mark.parametrize("log_mode", ["simple", "detailed"])

@@ -109,6 +109,20 @@ def create_app(settings=None, *, agent_factory=create_agent):
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
 
+    @app.post("/api/admin/reset-demo")
+    async def reset_demo(user: UserDep):
+        if user.role != "admin":
+            raise HTTPException(403, "仅管理员可以重置测试数据")
+        chat = app.state.chat
+        async with chat.lifecycle_lock:
+            for task in list(chat.tasks.values()):
+                await chat.cancel(task)
+            try:
+                return await app.state.db.knowledge.reset_demo(user.id)
+            except Exception:
+                logging.getLogger(__name__).exception("测试数据重置失败")
+                raise HTTPException(503, "重置失败，原有制度和聊天记录未清空") from None
+
     @app.post("/api/documents", status_code=201)
     async def upload(file: UploadFile, user: UserDep):
         if user.role != "admin":
@@ -128,6 +142,14 @@ def create_app(settings=None, *, agent_factory=create_agent):
         except Exception:
             logging.getLogger(__name__).exception("PDF 索引失败，上传未提交")
             raise HTTPException(503, "PDF 解析或索引失败，文件未入库，请稍后重试") from None
+
+    @app.delete("/api/documents/{document_id}")
+    async def delete_document(document_id: str, user: UserDep):
+        if user.role != "admin":
+            raise HTTPException(403, "仅管理员可以删除制度")
+        if not await app.state.db.knowledge.delete_document(document_id):
+            raise HTTPException(404, "制度不存在")
+        return {"ok": True}
 
     @app.get("/api/documents/{document_id}")
     async def document(document_id: str, user: UserDep):
@@ -160,7 +182,7 @@ def create_app(settings=None, *, agent_factory=create_agent):
     @app.post("/api/conversations", status_code=201)
     async def new_conversation(user: UserDep):
         row = Conversation(user_id=user.id, model=settings.model)
-        async with app.state.db.sessions() as session:
+        async with app.state.chat.lifecycle_lock, app.state.db.sessions() as session:
             session.add(row)
             await session.commit()
         return detail(row)

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { ChatDotRound, Collection, Document as DocumentIcon, Plus, Search, Upload, ArrowRight, SwitchButton, Close, Menu } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, streamTurn, type User, type Conversation, type Document, type Message } from './api'
 import Markdown from './Markdown.vue'
 
@@ -15,6 +15,7 @@ const page = ref<'chat' | 'knowledge'>('chat')
 const conversations = ref<Conversation[]>([])
 const current = ref<Conversation | null>(null)
 const documents = ref<Document[]>([])
+const availableDocumentIds = ref<string[]>([])
 const search = ref('')
 const selectedDocument = ref<Document | null>(null)
 const documentOpen = ref(false)
@@ -23,6 +24,8 @@ const pdfUrl = computed(() => selectedDocument.value ? `/api/documents/${selecte
 const draft = ref('')
 const sending = ref(false)
 const uploading = ref(false)
+const deleting = ref<string | null>(null)
+const resetting = ref(false)
 const modelReady = ref(true)
 const answerValues = ref<Record<string, string>>({})
 const scrollArea = ref<HTMLElement>()
@@ -37,7 +40,11 @@ const examples = ['外地培训回来，报销需要准备什么材料？', '出
 function showError(error: unknown) { ElMessage.error(error instanceof Error ? error.message : '操作失败') }
 async function guard(action: () => Promise<unknown>) { try { await action() } catch (error) { showError(error) } }
 async function listConversations() { conversations.value = await api<Conversation[]>('/conversations') }
-async function loadDocuments() { documents.value = await api<Document[]>('/documents?q=' + encodeURIComponent(search.value)) }
+async function loadDocuments() {
+  const all = await api<Document[]>('/documents')
+  availableDocumentIds.value = all.map(doc => doc.id)
+  documents.value = search.value.trim() ? await api<Document[]>('/documents?q=' + encodeURIComponent(search.value)) : all
+}
 async function initialize() {
   await Promise.all([listConversations(), loadDocuments()])
   const health = await api<{ model_configured: boolean }>('/health')
@@ -53,6 +60,7 @@ async function login() {
 }
 function clearSession() {
   user.value = null; current.value = null; conversations.value = []; documents.value = []
+  availableDocumentIds.value = []
   selectedDocument.value = null; documentOpen.value = false; draft.value = ''; answerValues.value = {}
 }
 async function logout() {
@@ -62,6 +70,7 @@ async function logout() {
 async function openConversation(id: string) {
   if (sending.value) return
   current.value = await api<Conversation>(`/conversations/${id}`)
+  await loadDocuments()
   answerValues.value = {}; draft.value = ''; page.value = 'chat'; mobileOpen.value = false
   await scrollDown()
 }
@@ -76,6 +85,37 @@ async function openDocument(id: string, page = 1) {
     documentPage.value = Math.max(1, Math.min(page, selectedDocument.value.page_count))
     documentOpen.value = true
   })
+}
+async function resetDemo() {
+  try {
+    await ElMessageBox.confirm('将清空全部制度（包括真实制度）及所有用户的聊天记录，并恢复三份初始模拟制度。正在生成的回答会停止。此操作无法撤销，本地源文件和登录账号保留。', '重置测试数据', {
+      confirmButtonText: '清空并重置', cancelButtonText: '取消', type: 'warning',
+    })
+  } catch { return }
+  resetting.value = true
+  try {
+    await api('/admin/reset-demo', { method: 'POST' })
+    current.value = null; conversations.value = []; draft.value = ''; answerValues.value = {}
+    documentOpen.value = false; selectedDocument.value = null; search.value = ''
+    await initialize()
+    ElMessage.success('已清空制度和聊天记录，并恢复三份模拟制度')
+  } catch (error) { showError(error) }
+  finally { resetting.value = false }
+}
+async function deleteDocument(doc: Document) {
+  try {
+    await ElMessageBox.confirm(`确定删除“${doc.title}”吗？原文和检索索引将一并删除，历史对话保留，但其中的原文链接将失效。`, '删除制度', {
+      confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning',
+    })
+  } catch { return }
+  deleting.value = doc.id
+  try {
+    await api(`/documents/${doc.id}`, { method: 'DELETE' })
+    if (selectedDocument.value?.id === doc.id) { documentOpen.value = false; selectedDocument.value = null }
+    await loadDocuments()
+    ElMessage.success('制度及检索索引已删除')
+  } catch (error) { showError(error) }
+  finally { deleting.value = null }
 }
 async function upload(event: Event) {
   const input = event.target as HTMLInputElement
@@ -153,7 +193,7 @@ onUnmounted(() => window.removeEventListener('session-expired', clearSession))
     <section class="login-intro">
       <div class="brand"><div class="brand-mark">办</div><span>办事助手</span></div>
       <div class="login-copy"><p class="eyebrow">部门制度 · 一处查询</p><h1>把制度查清楚，<br>把事情办明白。</h1><p>查阅制度原文，厘清办理流程。<br>让每一个回答，都有据可循。</p><div class="intro-tags"><span>制度知识库</span><span>智能问答</span><span>个人会话</span></div></div>
-      <small>内部试用版 · 初始资料为模拟制度</small>
+      <small>内部试用版 · 请核对制度适用范围</small>
     </section>
     <section class="login-form-area"><form class="login-card" @submit.prevent="login">
       <p class="eyebrow">欢迎回来</p><h2>登录你的工作空间</h2><p class="muted">制度共享，聊天记录仅自己可见。</p>
@@ -188,19 +228,19 @@ onUnmounted(() => window.removeEventListener('session-expired', clearSession))
             <article v-for="(message, index) in messages" :key="index" class="message" :class="message.role">
               <div v-if="message.role === 'assistant'" class="assistant-avatar">办</div><div class="message-body"><span class="message-author">{{ message.role === 'user' ? '你' : '办事助手' }}</span>
                 <div v-if="message.tools?.length" class="tool-row"><span v-for="tool in message.tools" :key="tool.id" class="tool-chip"><i :class="tool.status"></i>{{ tool.name === 'ask_question' ? '问问题' : '查资料' }} · {{ tool.status === 'running' ? '进行中' : tool.status === 'waiting' ? '待回答' : '已完成' }}</span></div>
-                <Markdown v-if="message.role === 'assistant' && message.text" :text="message.text" @document="openDocument" /><p v-else-if="message.role === 'user'" class="user-text">{{ message.text }}</p><div v-else-if="busy && index === messages.length - 1" class="thinking">正在思考<span>…</span></div>
-                <div v-if="message.sources?.length" class="source-row"><span>查阅资料</span><button v-for="source in message.sources" :key="`${source.id}-${source.page}`" @click="openDocument(source.id, source.page)"><el-icon><DocumentIcon /></el-icon>{{ source.title }} · 第 {{ source.page }} 页</button></div>
+                <Markdown v-if="message.role === 'assistant' && message.text" :text="message.text" :available-document-ids="availableDocumentIds" @document="openDocument" /><p v-else-if="message.role === 'user'" class="user-text">{{ message.text }}</p><div v-else-if="busy && index === messages.length - 1" class="thinking">正在思考<span>…</span></div>
+                <div v-if="message.sources?.length" class="source-row"><span>查阅资料</span><button v-for="source in message.sources" :key="`${source.id}-${source.page}`" :disabled="!availableDocumentIds.includes(source.id)" @click="openDocument(source.id, source.page)"><el-icon><DocumentIcon /></el-icon>{{ source.title }} · 第 {{ source.page }} 页<span v-if="!availableDocumentIds.includes(source.id)">（资料已删除）</span></button></div>
               </div>
             </article>
             <div v-if="current?.pending.length && !sending" class="question-card"><div class="question-heading">补充一点信息，继续办理</div><div v-for="question in current.pending" :key="question.id" class="question-item"><label :for="question.id">{{ question.question }}</label><div class="question-options"><button v-for="option in question.options || []" :key="option" :class="{ chosen: answerValues[question.id] === option }" @click="answerValues[question.id] = option">{{ option }}</button></div><el-input :id="question.id" v-model="answerValues[question.id]" placeholder="也可以直接输入你的回答" :maxlength="12000" /></div><el-button type="primary" :disabled="!readyAnswers || !modelReady" @click="send()">提交回答并继续 <el-icon><ArrowRight /></el-icon></el-button></div>
             <el-alert v-if="current?.error" :title="current.error" type="warning" show-icon :closable="false" />
           </div>
         </div>
-        <div class="composer-area"><div v-if="busy" class="generation-status"><span>正在处理你的问题…</span><el-button size="small" @click="guard(stop)">停止生成</el-button></div><div v-else-if="current && statusLabel[current.status]" class="generation-status"><span>{{ statusLabel[current.status] }}</span></div><div class="composer" :class="{ disabled: busy || Boolean(current?.pending.length) }"><textarea v-model="draft" aria-label="输入办事问题" :disabled="busy || Boolean(current?.pending.length) || !modelReady" :placeholder="current?.pending.length ? '请先回答上方问题' : '输入你想了解的事项…'" rows="2" maxlength="12000" @keydown="composerKey"></textarea><div class="composer-bottom"><span>基于制度回答 · 支持继续追问</span><el-button type="primary" :disabled="!draft.trim() || busy || Boolean(current?.pending.length) || !modelReady" :icon="ArrowRight" aria-label="发送消息" @click="send()" /></div></div><p class="composer-note">回答仅供参考，请以制度原文为准。初始三份制度为模拟资料。</p></div>
+        <div class="composer-area"><div v-if="busy" class="generation-status"><span>正在处理你的问题…</span><el-button size="small" @click="guard(stop)">停止生成</el-button></div><div v-else-if="current && statusLabel[current.status]" class="generation-status"><span>{{ statusLabel[current.status] }}</span></div><div class="composer" :class="{ disabled: busy || Boolean(current?.pending.length) }"><textarea v-model="draft" aria-label="输入办事问题" :disabled="busy || Boolean(current?.pending.length) || !modelReady" :placeholder="current?.pending.length ? '请先回答上方问题' : '输入你想了解的事项…'" rows="2" maxlength="12000" @keydown="composerKey"></textarea><div class="composer-bottom"><span>基于制度回答 · 支持继续追问</span><el-button type="primary" :disabled="!draft.trim() || busy || Boolean(current?.pending.length) || !modelReady" :icon="ArrowRight" aria-label="发送消息" @click="send()" /></div></div><p class="composer-note">回答仅供参考，请以现行制度原文为准。</p></div>
       </section>
-      <section v-else class="knowledge-page"><div class="page-heading"><div><p class="eyebrow">KNOWLEDGE BASE</p><h1>制度知识库</h1><p class="muted">查找制度、查看原文，让每一步都有依据。</p></div><el-button v-if="user.role === 'admin'" type="primary" :icon="Upload" :loading="uploading" @click="fileInput?.click()">{{ uploading ? '正在解析并建立索引…' : '上传 PDF' }}</el-button><input ref="fileInput" type="file" accept=".pdf,application/pdf" hidden @change="upload" /></div>
+      <section v-else class="knowledge-page"><div class="page-heading"><div><p class="eyebrow">KNOWLEDGE BASE</p><h1>制度知识库</h1><p class="muted">查找制度、查看原文，让每一步都有依据。</p></div><div v-if="user.role === 'admin'" class="knowledge-admin-actions"><el-button type="danger" plain :loading="resetting" :disabled="uploading || deleting !== null" @click="resetDemo">重置测试数据</el-button><el-button :disabled="resetting" type="primary" :icon="Upload" :loading="uploading" @click="fileInput?.click()">{{ uploading ? '正在解析并建立索引…' : '上传 PDF' }}</el-button></div><input ref="fileInput" type="file" accept=".pdf,application/pdf" hidden @change="upload" /></div>
         <div class="knowledge-toolbar"><el-input v-model="search" placeholder="输入问题或关键词搜索制度" maxlength="300" :prefix-icon="Search" clearable @keyup.enter="guard(loadDocuments)" @clear="guard(loadDocuments)" /><el-button @click="guard(loadDocuments)">搜索</el-button><span>{{ documents.length }} 份制度</span></div>
-        <div v-if="documents.length" class="document-grid"><button v-for="doc in documents" :key="doc.id" class="document-card" @click="openDocument(doc.id, doc.match_page)"><div class="document-card-top"><span class="file-icon"><el-icon><DocumentIcon /></el-icon></span><span class="file-type">PDF · {{ doc.page_count }} 页</span></div><h3>{{ doc.title }}</h3><p>{{ doc.preview }}</p><div class="document-card-footer"><span>{{ doc.filename }}</span><span>查看原文 ↗</span></div></button></div><el-empty v-else description="没有找到匹配的制度，试试其他关键词" />
+        <div v-if="documents.length" class="document-grid"><article v-for="doc in documents" :key="doc.id" class="document-entry"><button class="document-card" @click="openDocument(doc.id, doc.match_page)"><div class="document-card-top"><span class="file-icon"><el-icon><DocumentIcon /></el-icon></span><span class="file-type">PDF · {{ doc.page_count }} 页</span></div><h3>{{ doc.title }}</h3><p>{{ doc.preview }}</p><div class="document-card-footer"><span>{{ doc.filename }}</span><span>查看原文 ↗</span></div></button><div v-if="user.role === 'admin'" class="document-actions"><el-button type="danger" plain size="small" :loading="deleting === doc.id" :disabled="deleting !== null || resetting" :aria-label="`删除${doc.title}`" @click="deleteDocument(doc)">删除制度</el-button></div></article></div><el-empty v-else description="没有找到匹配的制度，试试其他关键词" />
         <p class="knowledge-note">{{ user.role === 'admin' ? '支持可复制文字的 PDF，单份不超过 20 MB、200 页；暂不支持扫描件和加密文件。解析完成后即可查询。' : '制度由管理员维护，所有登录成员均可查询。' }}</p>
       </section>
     </main>

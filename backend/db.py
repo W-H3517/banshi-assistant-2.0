@@ -63,6 +63,11 @@ class Document(Base):
     uploaded_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
 
 
+class SeedImport(Base):
+    __tablename__ = "seed_imports"
+    sha256: Mapped[str] = mapped_column(String, primary_key=True)
+
+
 class Chunk(Base):
     __tablename__ = "chunks"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)

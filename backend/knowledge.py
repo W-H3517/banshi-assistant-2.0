@@ -6,11 +6,11 @@ import re
 import jieba
 import numpy as np
 from rank_bm25 import BM25Okapi
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
 from .config import ROOT
-from .db import Chunk, Document, User
+from .db import Chunk, Conversation, Document, SeedImport, User
 from .embeddings import LocalEmbeddings
 from .pdf import extract_pages
 
@@ -54,10 +54,57 @@ class KnowledgeBase:
         async with self.db.sessions() as session:
             admin = await session.scalar(select(User).where(User.username == "admin"))
             existing = set(await session.scalars(select(Document.sha256)))
+            imported = set(await session.scalars(select(SeedImport.sha256)))
         for path in sorted((ROOT / "data/fixtures").glob("*.pdf")):
             raw = path.read_bytes()
-            if hashlib.sha256(raw).hexdigest() not in existing:
+            digest = hashlib.sha256(raw).hexdigest()
+            if digest in imported:
+                continue
+            if digest not in existing:
                 await self.upload(path.name, raw, admin.id)
+            async with self.db.sessions() as session:
+                session.add(SeedImport(sha256=digest))
+                await session.commit()
+
+    async def delete_document(self, document_id):
+        async with self.upload_lock, self.db.sessions() as session:
+            if await session.get(Document, document_id) is None:
+                return False
+            await session.execute(delete(Chunk).where(Chunk.document_id == document_id))
+            await session.execute(delete(Document).where(Document.id == document_id))
+            await session.commit()
+        return True
+
+    async def reset_demo(self, user_id):
+        async with self.upload_lock:
+            # 先完成解析和向量生成，全部成功后才在同一事务中替换现有资料。
+            prepared = []
+            for path in sorted((ROOT / "data/fixtures").glob("*.pdf")):
+                raw = path.read_bytes()
+                pages = await asyncio.to_thread(extract_pages, raw)
+                title = next(text for text in pages if text).splitlines()[0][:160]
+                chunks = await asyncio.to_thread(self.embeddings.split, title, pages)
+                vectors = await asyncio.to_thread(self.embeddings.passages, title, chunks)
+                prepared.append((Document(
+                    title=title, filename=path.name, sha256=hashlib.sha256(raw).hexdigest(),
+                    page_count=len(pages), chunk_count=len(chunks),
+                    preview=next(text for text in pages if text)[:160],
+                    original=raw, uploaded_by=user_id,
+                ), chunks, vectors))
+            if len(prepared) != 3:
+                raise ValueError("初始模拟制度应为三份，重置已取消")
+            async with self.db.sessions.begin() as session:
+                for model in (Conversation, Chunk, Document, SeedImport):
+                    await session.execute(delete(model))
+                for document, chunks, vectors in prepared:
+                    session.add(document)
+                    await session.flush()
+                    session.add_all([
+                        Chunk(document_id=document.id, **chunk, vector=vector.tobytes())
+                        for chunk, vector in zip(chunks, vectors, strict=True)
+                    ])
+                    session.add(SeedImport(sha256=document.sha256))
+        return {"ok": True, "document_count": len(prepared)}
 
     async def upload(self, filename, raw, user_id):
         digest = hashlib.sha256(raw).hexdigest()

@@ -27,6 +27,7 @@ data/models/
 node_modules/
 frontend/dist/
 *.tsbuildinfo
+/测试素材/
 
 # Local IDE settings
 .idea/
