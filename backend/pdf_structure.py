@@ -1,4 +1,4 @@
-"""只读候选切分：保留原文坐标供 PDF 高亮，不修改现行索引。"""
+"""文字 PDF 结构提取，保留正文、条款、表格及来源坐标。"""
 
 import re
 from collections import Counter
@@ -7,12 +7,39 @@ from io import BytesIO
 import pdfplumber
 
 from .pdf import extract_pages
-from .table_preview import describe_tables, extract_grid
+from .pdf_tables import extract_grid
 
 NUMBER = r"[零〇一二三四五六七八九十百千两\d]+"
 ARTICLE = re.compile(rf"^(第\s*{NUMBER}\s*条)(.*)$", re.DOTALL)
 ANNEX = re.compile(r"^附件\s*\d+\s*$")
 PAGE_NUMBER = re.compile(r"^(?:[-—–]\s*\d+\s*[-—–]|第\s*\d+\s*页(?:\s*共\s*\d+\s*页)?)$")
+
+
+def heading_level(text):
+    """仅识别原文显式层级；带完整句子或规定的编号段落不当纯标题删除。"""
+    if ANNEX.fullmatch(text):
+        return 0
+    if re.match(rf"^第\s*{NUMBER}\s*章", text):
+        return 1
+    if re.match(rf"^第\s*{NUMBER}\s*节", text):
+        return 2
+    if len(text) <= 80 and not re.search(r"[。！？；：:]|应当|必须|不得|严禁", text):
+        if re.match(r"^[一二三四五六七八九十]+、", text):
+            return 3
+        if re.match(r"^[（(][一二三四五六七八九十]+[）)]", text):
+            return 4
+    return None
+
+
+def article_label(text):
+    match = ARTICLE.match(text)
+    if match:
+        return match[1]
+    match = re.match(r"^(\d+[.．、])(?=\D)", text)
+    if match:
+        first = text.split("。", 1)[0]
+        return first if "。" in text and len(first) <= 50 else match[1]
+    return ""
 
 
 def normalize_line(text):
@@ -71,8 +98,8 @@ def text_regions(section, start, end, pages):
     return regions, status
 
 
-def convert_pdf(raw):
-    extract_pages(raw)  # 文字 PDF 候选预览；扫描 PDF 直接读取入库时保存的解析快照。
+def convert_pdf(raw, title=""):
+    extract_pages(raw)
     records, removed, page_info = [], [], []
     with pdfplumber.open(BytesIO(raw)) as pdf:
         pages = []
@@ -121,7 +148,7 @@ def convert_pdf(raw):
 
     sections = []
     current = None
-    chapter = "正文"
+    chapter = ""
 
     def begin(title, kind):
         nonlocal current
@@ -137,26 +164,30 @@ def convert_pdf(raw):
 
     for row in records:
         text, boxes = row["source"] if row["kind"] == "text" else (row["text"], None)
-        article = ARTICLE.match(text)
-        # normalize_line 会去掉章节编号与标题之间的中文空格。
-        is_chapter = re.match(rf"^第\s*{NUMBER}\s*[章节]", text)
+        article = article_label(text)
+        is_title = bool(title) and "".join(text.split()) == "".join(title.split())
+        is_chapter = heading_level(text) is not None
         if row["kind"] == "table":
             begin(f"表格（PDF 第 {row['page']} 页）", "table")
             current["table_data"] = row["table_data"]
             append(text, row["page"], boxes=boxes)
             current = None
-        elif is_chapter or ANNEX.fullmatch(text):
+        elif is_title:
+            begin(text, "document_title")
+            append(text, row["page"], boxes=boxes)
+        elif is_chapter:
             chapter = text
             begin(text, "heading")
             append(text, row["page"], boxes=boxes)
         elif article:
-            begin(article[1], "article")
+            begin(article, "article")
             append(text, row["page"], boxes=boxes)
         elif re.match(r"^附件\s*[:：]", text):
             begin("附件目录", "text")
             append(text, row["page"], boxes=boxes)
         else:
-            if current is None or current["kind"] == "heading":
+            if current is None or current["kind"] in ("heading", "document_title") or (current["kind"] == "text" and current["content"].endswith(("。", "！", "？"))
+                  and current["source_spans"][-1]["page"] != row["page"]):
                 begin("说明 / 段落", "text")
             previous = current["content"]
             separator = ""
@@ -170,45 +201,3 @@ def convert_pdf(raw):
     for section in sections:
         section["pages"] = sorted({span["page"] for span in section["source_spans"]})
     return {"sections": sections, "pages": page_info, "removed_lines": removed}
-
-
-def preview_document(raw, title, embeddings):
-    result = convert_pdf(raw)
-    result["tables"] = describe_tables(result["sections"], title)
-    chunks = []
-    for section in result["sections"]:
-        if section["kind"] == "table":
-            table = next(t for t in result["tables"] if t["section_id"] == section["id"])
-            for row in table["rows"]:
-                count = len(embeddings.tokenizer.encode(title[:60] + "\n" + row["content"]).ids)
-                boxes = list(dict.fromkeys(tuple(field["bbox"]) for field in row["fields"]
-                                           if field["bbox"] is not None))
-                regions = [rect for box in boxes
-                           if (rect := region(box, result["pages"][row["page"] - 1]))]
-                chunks.append({"ordinal": len(chunks), "section_id": section["id"],
-                               "title": section["title"], "chapter": section["chapter"],
-                               "kind": "table_row", "pages": [row["page"]],
-                               "header_pages": table["header_pages"], "row": row["row"],
-                               "content": row["content"], "token_count": count,
-                               "needs_review": True, "over_budget": count > 512,
-                               "regions": regions, "location_status": "complete" if regions
-                               and len(regions) == len(boxes) else "partial" if regions else "unlocated"})
-            continue
-        # 与现有模型使用相同长度预算；切分只在本条款内展开，可跨物理页。
-        cursor = 0
-        for chunk in embeddings.split(title, [section["content"]]):
-            start = section["content"].index(chunk["content"], cursor)
-            end = start + len(chunk["content"])
-            cursor = start + 1
-            pages = sorted({span["page"] for span in section["source_spans"]
-                            if span["start"] < end and span["end"] > start})
-            regions, location_status = text_regions(section, start, end, result["pages"])
-            chunks.append({"ordinal": len(chunks), "section_id": section["id"],
-                           "regions": regions, "location_status": location_status,
-                           "title": section["title"], "chapter": section["chapter"],
-                           "kind": section["kind"], "pages": pages,
-                           "content": chunk["content"], "start": start, "end": end,
-                           "token_count": len(embeddings.tokenizer.encode(
-                               title[:60] + "\n" + chunk["content"]).ids)})
-    return {"pages": result["pages"], "chunks": chunks, "version": "pdf-chunks-v1",
-            "removed_line_count": len(result["removed_lines"]), "active_for_search": False}

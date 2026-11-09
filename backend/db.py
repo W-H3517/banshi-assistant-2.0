@@ -69,7 +69,7 @@ class SeedImport(Base):
 
 
 class DocumentParse(Base):
-    """扫描/混合 PDF 的解析快照，与原文及检索片段同事务保存。"""
+    """全部 PDF 的结构、来源及实际检索片段快照，与原文同事务保存。"""
 
     __tablename__ = "document_parses"
     document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), primary_key=True)

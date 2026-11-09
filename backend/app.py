@@ -19,7 +19,6 @@ from .auth import COOKIE, current_user, digest, public_user
 from .chat import ChatService, detail, owned
 from .config import ROOT, Settings
 from .db import Conversation, Database, Document, DocumentParse, Login, User, check_password
-from .document_preview import preview_document
 from .knowledge import DuplicateDocument, KnowledgeBase, public_document
 from .logging_setup import LoggingRuntime
 from .ocr import OCRUnavailable
@@ -49,6 +48,7 @@ def create_app(settings=None, *, agent_factory=create_agent):
             await db.initialize()
             app.state.db = db
             db.knowledge = await KnowledgeBase.create(db, settings)
+            await db.knowledge.rebuild()
             await db.knowledge.seed()
             app.state.chat = ChatService(db, settings, agent_factory, logs.instrumentation)
             try:
@@ -173,17 +173,7 @@ def create_app(settings=None, *, agent_factory=create_agent):
             if doc is None:
                 raise HTTPException(404, "制度不存在")
             parsed = await session.get(DocumentParse, document_id)
-            if parsed is not None:
-                return {**parsed.payload["preview"], "document": public_document(doc)}
-            raw = await session.scalar(select(Document.original).where(Document.id == document_id))
-        try:
-            result = await asyncio.to_thread(
-                preview_document, raw, doc.title, app.state.db.knowledge.embeddings,
-            )
-        except Exception:
-            logging.getLogger(__name__).exception("制度切分预览失败 document_id=%s", document_id)
-            raise HTTPException(503, "切分预览失败，现有资料和检索索引未改变") from None
-        return {**result, "document": public_document(doc)}
+            return {**parsed.payload["preview"], "document": public_document(doc)}
 
     @app.get("/api/documents/{document_id}/file")
     async def original_pdf(document_id: str, user: UserDep):

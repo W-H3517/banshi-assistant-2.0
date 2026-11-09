@@ -31,43 +31,40 @@ class LocalEmbeddings:
         self.tokenizer.no_padding()
         self.lock = threading.Lock()
 
-    def split(self, title: str, pages: list[str], *, with_offsets=False) -> list[dict]:
-        prefix = title[:60] + "\n"
-        budget = min(380, 480 - len(self.tokenizer.encode(prefix).ids))
-        chunks = []
-        for page, text in enumerate(pages, 1):
-            position = 0
-            while position < len(text):
-                # 先限制字符窗口：一个超长单词可能只编码成一个 [UNK] token。
-                window = text[position:position + 1000]
-                offsets = self.tokenizer.encode(window, add_special_tokens=False).offsets
-                if not offsets:
-                    position += len(window)
-                    continue
-                end = min(budget, len(offsets))
-                # 尽可能在句末或段末分块，保留少量重叠以承接条款条件。
-                if end < len(offsets):
-                    for candidate in range(end, end * 2 // 3, -1):
-                        boundary = offsets[candidate - 1][1]
-                        if (window[boundary - 1:boundary] in "。；！？.!?"
-                                or window[boundary:boundary + 1] == "\n"):
-                            end = candidate
-                            break
-                boundary = offsets[end - 1][1]
-                content = window[:boundary].strip()
-                chunk = {"page": page, "ordinal": len(chunks), "content": content}
-                if with_offsets:
-                    prefix_text = window[:boundary]
-                    chunk.update(start=position + len(prefix_text) - len(prefix_text.lstrip()),
-                                 end=position + len(prefix_text.rstrip()))
-                chunks.append(chunk)
-                if position + boundary >= len(text.rstrip()):
-                    break
-                position += offsets[max(1, end - 50)][0] if end > 1 else max(1, boundary - 50)
+    def split(self, context: str, text: str) -> list[dict]:
+        """上下文计入输入预算；正常段落完整保留，超长时按句界拆分并保留 offsets。"""
+        if len(self.tokenizer.encode(context).ids) > 380 or len(context) > 700:
+            raise ValueError("文件及章节信息过长，请缩短文件名或核对标题层级")
+        chunks, position = [], 0
+        while position < len(text):
+            window = text[position:position + 1000 - len(context)]
+            offsets = self.tokenizer.encode(window, add_special_tokens=False).offsets
+            if not offsets:
+                position += len(window)
+                continue
+            budget = 510 - len(self.tokenizer.encode(context).ids)
+            count = min(budget, len(offsets))
+            boundary = offsets[count - 1][1]
+            while count > 1 and len(self.tokenizer.encode(context + window[:boundary]).ids) > 512:
+                count -= 1
+                boundary = offsets[count - 1][1]
+            if position + boundary < len(text.rstrip()):
+                for candidate in range(count, max(1, count // 2), -1):
+                    at = offsets[candidate - 1][1]
+                    if window[at - 1:at] in "。；！？.!?" or window[at:at + 1] == "\n":
+                        boundary = at
+                        break
+            part = window[:boundary]
+            content = part.strip()
+            if content:
+                chunks.append({"content": content,
+                               "start": position + len(part) - len(part.lstrip()),
+                               "end": position + len(part.rstrip())})
+            position += boundary
         return chunks
 
-    def passages(self, title, chunks):
-        texts = [title[:60] + "\n" + chunk["content"] for chunk in chunks]
+    def passages(self, chunks):
+        texts = [chunk["retrieval_text"] for chunk in chunks]
         if any(len(self.tokenizer.encode(text).ids) > 512 for text in texts):
             raise ValueError("片段超过嵌入模型输入限制")
         with self.lock:

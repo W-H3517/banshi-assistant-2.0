@@ -4,8 +4,8 @@ from io import BytesIO
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
 
-from backend.document_preview import convert_pdf
-from backend.table_preview import describe_tables
+from backend.pdf_structure import convert_pdf
+from backend.pdf_tables import describe_tables
 
 
 def test_merged_cells_expand_only_with_actual_geometry():

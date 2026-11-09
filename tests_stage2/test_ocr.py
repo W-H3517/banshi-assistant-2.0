@@ -11,7 +11,8 @@ from backend.app import create_app
 from backend.config import Settings
 from backend.db import Chunk, Document, DocumentParse
 from backend.embeddings import LocalEmbeddings
-from backend.ocr import LocalOCR, OCRUnavailable, indexed_preview, model_paths
+from backend.indexing import INDEX_VERSION, assign_context, build_chunks
+from backend.ocr import LocalOCR, OCRUnavailable, model_paths
 from backend.pdf import InvalidPDF, extract_pages
 from tests_stage2.test_app import login
 
@@ -65,7 +66,8 @@ def test_paragraph_mapping_mixed_pages_and_long_paragraph_budget(tmp_path, monke
     parsed = LocalOCR(tmp_path).parse(raw, scanned)
     assert len(calls) == 2
     embeddings = LocalEmbeddings(Settings().model_cache_dir)
-    preview = indexed_preview(parsed, "通知", embeddings)
+    assign_context(parsed["sections"], "通知")
+    preview = build_chunks(parsed, "通知", "通知.pdf", embeddings)
     cross_page = next(c for c in preview['chunks'] if len(c['pages']) > 1)
     assert cross_page['content'] == '1.办理事项。申请人应当提交完整材料并在审核通过后办理。不得提前领取。'
     assert cross_page['pages'] == [1, 2] and len(cross_page['regions']) == 3
@@ -82,11 +84,11 @@ def test_paragraph_mapping_mixed_pages_and_long_paragraph_budget(tmp_path, monke
                                'boxes': [[60, 100, 90, 120]] * len(section['content']),
                                'confidence': .99}]
     parsed['sections'] = [section]
-    chunks = indexed_preview(parsed, '通知', embeddings)['chunks']
+    chunks = build_chunks(parsed, '通知', '通知.pdf', embeddings)['chunks']
     assert len(chunks) > 1 and chunks[-1]['content'].endswith('最终例外须保留。')
     assert all(c['token_count'] <= 512 for c in chunks)
-    assert all('超过模型长度' in ''.join(c['warnings']) for c in chunks)
-    embeddings.passages('通知', chunks)
+    assert all('超过输入预算' in ''.join(c['warnings']) for c in chunks)
+    embeddings.passages(chunks)
 
 
 def test_ocr_models_missing_never_download_during_request(tmp_path, monkeypatch):
@@ -107,9 +109,9 @@ def test_scanned_upload_preview_search_restart_and_delete(tmp_path, monkeypatch)
         assert response.status_code == 201, response.text
         document = response.json()
         path = f"/api/documents/{document['id']}"
-        assert len(calls) == 2 and document['chunk_count'] == 3
+        assert len(calls) == 2 and document['chunk_count'] == 2
         preview = client.get(path+'/chunk-preview').json()
-        assert preview['active_for_search'] is True and preview['ocr_pages'] == [1, 2]
+        assert preview['version'] == INDEX_VERSION and preview['ocr_pages'] == [1, 2]
         assert client.get(path+'/file').content == raw
         assert client.get(path+'/chunk-preview').json() == preview and len(calls) == 2
         hits = client.portal.call(client.app.state.db.knowledge.search, '完整材料', document['id'], 2)
@@ -120,7 +122,7 @@ def test_scanned_upload_preview_search_restart_and_delete(tmp_path, monkeypatch)
             async with client.app.state.db.sessions() as session:
                 chunks = list(await session.scalars(select(Chunk).where(
                     Chunk.document_id == document['id']).order_by(Chunk.ordinal)))
-                assert [c.content for c in chunks] == [c['content'] for c in preview['chunks']]
+                assert [c.content for c in chunks] == [c['retrieval_text'] for c in preview['chunks']]
         client.portal.call(check_rows)
         assert client.post('/api/documents', files={'file': ('重复.pdf', raw)}).status_code == 409
         login(client, 'alice')
@@ -153,7 +155,7 @@ def test_ocr_failure_and_embedding_failure_leave_no_partial_data(tmp_path, monke
         assert client.get('/api/documents').json() == before
         async def counts():
             async with client.app.state.db.sessions() as session:
-                assert await session.scalar(select(func.count()).select_from(DocumentParse)) == 0
+                assert await session.scalar(select(func.count()).select_from(DocumentParse)) == len(before)
                 assert await session.scalar(select(func.count()).select_from(Document)) == len(before)
         client.portal.call(counts)
 

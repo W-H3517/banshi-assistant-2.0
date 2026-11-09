@@ -8,10 +8,17 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
 
 from backend.app import create_app
 from backend.config import Settings
-from backend.document_preview import convert_pdf, preview_document
 from backend.embeddings import LocalEmbeddings
+from backend.indexing import INDEX_VERSION, assign_context, build_chunks
+from backend.pdf_structure import convert_pdf
 from tests_stage2.pdf_helpers import make_pdf
 from tests_stage2.test_app import login
+
+
+def indexed(raw, title, embeddings):
+    parsed = convert_pdf(raw, title)
+    assign_context(parsed["sections"], title)
+    return build_chunks(parsed, title, title+".pdf", embeddings)
 
 
 def test_cross_page_articles_preserve_all_paragraphs():
@@ -64,11 +71,11 @@ def test_preview_chunks_keep_page_mapping_and_model_budget():
     embeddings = LocalEmbeddings(Settings().model_cache_dir)
     raw = make_pdf(["测试制度\n第一条 " + "提交完整证明材料，经审批后办理。" * 20,
                     "跨页补充限制不得遗漏。\n第二条 另一项规定。"])
-    result = preview_document(raw, "测试制度", embeddings)
+    result = indexed(raw, "测试制度", embeddings)
     assert any(c["pages"] == [1, 2] for c in result["chunks"])
     assert all(c["token_count"] <= 512 for c in result["chunks"])
     assert any("跨页补充限制" in c["content"] for c in result["chunks"])
-    sections = convert_pdf(raw)["sections"]
+    sections = convert_pdf(raw, "测试制度")["sections"]
     for chunk in result["chunks"]:
         assert chunk["location_status"] == "complete"
         assert {r["page"] for r in chunk["regions"]} == set(chunk["pages"])
@@ -90,7 +97,8 @@ def test_preview_permissions_and_no_index_mutations(tmp_path):
         first = client.get(path)
         assert first.status_code == 200
         result = first.json()
-        assert result["active_for_search"] is False
+        assert result["version"] == INDEX_VERSION
+        assert "active_for_search" not in result
         assert result["pages"] and result["chunks"]
         assert "current_chunks" not in result and "markdown" not in result
         paths = {route.path for route in client.app.routes}
@@ -114,11 +122,12 @@ def test_text_highlight_stops_at_chunk_boundary_and_tracks_repeated_text():
     class Splitter:
         tokenizer = SimpleNamespace(encode=lambda text: SimpleNamespace(ids=list(text)))
 
-        def split(self, title, texts):
-            return [{"content": "ABC"}, {"content": "ABC"}]
+        def split(self, context, text):
+            return [{"content": "ABC", "start": 0, "end": 3},
+                    {"content": "ABC", "start": 4, "end": 7}]
 
     raw = make_pdf(["ABC ABC"], font="Helvetica")
-    result = preview_document(raw, "Example", Splitter())
+    result = indexed(raw, "Example", Splitter())
     first, second = result["chunks"]
     assert first["location_status"] == second["location_status"] == "complete"
     assert len(first["regions"]) == len(second["regions"]) == 1
@@ -134,7 +143,7 @@ def test_table_chunks_highlight_shared_source_cells():
     table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 1, colors.black),
                                ("SPAN", (0, 1), (0, 2))]))
     SimpleDocTemplate(stream).build([table])
-    result = preview_document(stream.getvalue(), "Example",
+    result = indexed(stream.getvalue(), "Example",
                               LocalEmbeddings(Settings().model_cache_dir))
     a, b = result["chunks"]
     assert a["needs_review"] and b["needs_review"]

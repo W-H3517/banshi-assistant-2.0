@@ -29,17 +29,19 @@ def embeddings():
 def test_long_text_is_chunked_without_truncating_tail(embeddings):
     text = "长篇制度。" + "员工办理申请时应提交真实完整材料，并由负责人确认适用范围。" * 120
     text += "\n最终例外：应急采购金额上限为八千元。"
-    chunks = embeddings.split("长篇制度", [text, "第二页规定：材料需要留存三年。"])
+    context = "文件：长篇制度\n文件名：长篇制度.pdf\n章节：第一章\n条目：第一条\n正文：\n"
+    chunks = embeddings.split(context, text)
     assert len(chunks) > MAX_RESULTS
-    assert any("应急采购金额上限为八千元" in chunk["content"] for chunk in chunks)
-    assert chunks[-1]["page"] == 2
-    assert all(len(chunk["content"]) <= 1000 for chunk in chunks)
-    assert all(len(embeddings.tokenizer.encode("长篇制度\n" + chunk["content"]).ids) <= 512
-               for chunk in chunks)
-    vectors = embeddings.passages("长篇制度", chunks)
+    assert chunks[-1]["content"].endswith("应急采购金额上限为八千元。")
+    assert all(chunk["content"] == text[chunk["start"]:chunk["end"]] for chunk in chunks)
+    for chunk in chunks:
+        chunk["retrieval_text"] = context + chunk["content"]
+    assert all(len(chunk["retrieval_text"]) <= 1000 for chunk in chunks)
+    assert all(len(embeddings.tokenizer.encode(chunk["retrieval_text"]).ids) <= 512 for chunk in chunks)
+    vectors = embeddings.passages(chunks)
     assert vectors.shape == (len(chunks), 512)
     assert np.allclose(np.linalg.norm(vectors, axis=1), 1, atol=1e-5)
-    unusual = embeddings.split("代码附录", ["x" * 4000 + "最终条款"])
+    unusual = embeddings.split(context, "x" * 4000 + "最终条款")
     assert all(len(chunk["content"]) <= 1000 for chunk in unusual)
     assert unusual[-1]["content"].endswith("最终条款")
 
@@ -100,7 +102,7 @@ def test_pdf_upload_page_citation_auth_failure_and_restart(tmp_path, monkeypatch
                 raise RuntimeError("模拟嵌入故障")
             patch.setattr(app.state.db.knowledge.embeddings, "passages", fail)
             failure = client.post("/api/documents", files={
-                "file": ("失败.pdf", make_pdf(["不应入库的文件"])),
+                "file": ("失败.pdf", make_pdf(["失败测试\n此文件不应入库。"] )),
             })
             assert failure.status_code == 503
             assert "未入库" in failure.json()["detail"]

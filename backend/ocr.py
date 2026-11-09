@@ -13,8 +13,8 @@ import pdfplumber
 import pypdfium2 as pdfium
 from rapidocr import RapidOCR
 
-from .document_preview import line_sources, text_regions
 from .pdf import InvalidPDF
+from .pdf_structure import article_label, heading_level, line_sources
 
 logger = logging.getLogger(__name__)
 # PDFium 即使处理不同文档也不能并行调用。
@@ -154,12 +154,12 @@ def restore_paragraphs(pages):
             kind = "text"
             if box[0] > page["width"] * .42:
                 kind = "review"
-            elif re.match(r"^[一二三四五六七八九十]+[、．.]", text) or not sections:
+            elif heading_level(text) is not None or not sections:
                 kind = "heading"
             new = previous is None or kind != "text" or sections[-1]["kind"] != "text"
             if not new:
                 prev_text, prev_box, prev_number, prev_right, prev_height = previous
-                if box[0] - left > height * .65 or re.match(r"^\d+[.．、]", text):
+                if box[0] - left > height * .65 or article_label(text):
                     new = True
                 elif prev_number != page["number"]:
                     new = not (prev_box[2] > prev_right - 1.5 * prev_height
@@ -169,7 +169,7 @@ def restore_paragraphs(pages):
                     new = True
             if new:
                 sections.append({"id": len(sections) + 1, "kind": kind, "title": text[:40],
-                                 "chapter": "自然段", "content": "", "source_spans": []})
+                                 "chapter": "", "content": "", "source_spans": []})
             section = sections[-1]
             start = len(section["content"])
             section["content"] += text
@@ -180,38 +180,3 @@ def restore_paragraphs(pages):
     for section in sections:
         section["pages"] = sorted({s["page"] for s in section["source_spans"]})
     return sections
-
-
-def indexed_preview(parsed, title, embeddings):
-    chunks = []
-    for section in parsed["sections"]:
-        content = section["content"]
-        count = len(embeddings.tokenizer.encode(title[:60] + "\n" + content).ids)
-        # 正常段落保持完整；仅超过向量模型上限时复用现有有界切分。
-        parts = ([{"content": content, "start": 0, "end": len(content)}]
-                 if count <= 512 and len(content) <= 1000 else
-                 embeddings.split(title, [content], with_offsets=True))
-        for part in parts:
-            start, end = part["start"], part["end"]
-            spans = [s for s in section["source_spans"] if s["start"] < end and s["end"] > start]
-            regions, status = text_regions(section, start, end, parsed["pages"])
-            warning = []
-            if section["kind"] == "review":
-                warning.append("落款或印章区域，识别文字及段落归属需核对")
-            if any(s["confidence"] is not None and s["confidence"] < .9 for s in spans):
-                warning.append("含低分识别文字，请对照原文")
-            if len(parts) > 1:
-                warning.append("原段落超过模型长度限制，已进一步拆分")
-            chunks.append({"ordinal": len(chunks), "section_id": section["id"],
-                           "title": section["title"], "chapter": section["chapter"],
-                           "kind": section["kind"], "pages": sorted({s["page"] for s in spans}),
-                           "content": part["content"], "start": start, "end": end,
-                           "token_count": len(embeddings.tokenizer.encode(
-                               title[:60] + "\n" + part["content"]).ids),
-                           "regions": regions, "location_status": status,
-                           "needs_review": bool(warning), "warnings": warning})
-    return {"pages": [{k: v for k, v in p.items() if k != "lines"} for p in parsed["pages"]],
-            "chunks": chunks, "version": "ocr-paragraphs-v1", "removed_line_count": 0,
-            "active_for_search": True, "ocr_pages": [p["number"] for p in parsed["pages"] if p["ocr"]],
-            "warnings": ["扫描页使用本地 OCR，印章、日期和数字可能识别错误；高分不代表正确。",
-                         "段落恢复按单栏规则处理，表格和多栏内容需对照原 PDF 核对。"]}

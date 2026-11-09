@@ -6,14 +6,14 @@ import re
 import jieba
 import numpy as np
 from rank_bm25 import BM25Okapi
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
 from .config import ROOT
 from .db import Chunk, Conversation, Document, DocumentParse, SeedImport, User
 from .embeddings import LocalEmbeddings
-from .ocr import LocalOCR, indexed_preview
-from .pdf import extract_pages
+from .indexing import INDEX_VERSION, prepare_document
+from .ocr import LocalOCR
 
 logger = logging.getLogger(__name__)
 jieba.setLogLevel(logging.WARNING)
@@ -78,34 +78,69 @@ class KnowledgeBase:
             await session.commit()
         return True
 
+    async def prepare(self, filename, raw):
+        title, snapshot = await asyncio.to_thread(
+            prepare_document, raw, filename, self.embeddings, self.ocr,
+        )
+        vectors = await asyncio.to_thread(self.embeddings.passages, snapshot["preview"]["chunks"])
+        return title, snapshot, vectors
+
+    @staticmethod
+    def store_index(session, document, snapshot, vectors):
+        chunks = snapshot["preview"]["chunks"]
+        document.chunk_count = len(chunks)
+        session.add(DocumentParse(document_id=document.id, payload=snapshot))
+        session.add_all([Chunk(document_id=document.id, page=chunk["pages"][0],
+                               ordinal=chunk["ordinal"], content=chunk["retrieval_text"],
+                               vector=vector.tobytes())
+                         for chunk, vector in zip(chunks, vectors, strict=True)])
+
+    async def rebuild(self):
+        """全部准备成功后，以一个事务替换旧切分/索引；不保留旧版读取分支。"""
+        async with self.upload_lock:
+            async with self.db.sessions() as session:
+                documents = list(await session.scalars(select(Document).order_by(Document.id)))
+                snapshots = {p.document_id: p.payload for p in await session.scalars(select(DocumentParse))}
+                if all(snapshots.get(d.id, {}).get("version") == INDEX_VERSION for d in documents):
+                    return 0
+                originals = {d.id: await session.scalar(select(Document.original).where(Document.id == d.id))
+                             for d in documents}
+            prepared = []
+            for document in documents:
+                title, snapshot, vectors = await self.prepare(document.filename, originals[document.id])
+                prepared.append((document.id, title, snapshot, vectors))
+            async with self.db.sessions.begin() as session:
+                await session.execute(delete(Chunk))
+                await session.execute(delete(DocumentParse))
+                for document_id, title, snapshot, vectors in prepared:
+                    document = await session.get(Document, document_id)
+                    document.title = title
+                    document.preview = snapshot["preview"]["chunks"][0]["content"][:160]
+                    self.store_index(session, document, snapshot, vectors)
+            logger.info("结构上下文索引重建完成 documents=%d version=%s", len(prepared), INDEX_VERSION)
+            return len(prepared)
+
     async def reset_demo(self, user_id):
         async with self.upload_lock:
-            # 先完成解析和向量生成，全部成功后才在同一事务中替换现有资料。
             prepared = []
             for path in sorted((ROOT / "data/fixtures").glob("*.pdf")):
                 raw = path.read_bytes()
-                pages = await asyncio.to_thread(extract_pages, raw)
-                title = next(text for text in pages if text).splitlines()[0][:160]
-                chunks = await asyncio.to_thread(self.embeddings.split, title, pages)
-                vectors = await asyncio.to_thread(self.embeddings.passages, title, chunks)
+                title, snapshot, vectors = await self.prepare(path.name, raw)
                 prepared.append((Document(
                     title=title, filename=path.name, sha256=hashlib.sha256(raw).hexdigest(),
-                    page_count=len(pages), chunk_count=len(chunks),
-                    preview=next(text for text in pages if text)[:160],
+                    page_count=len(snapshot["preview"]["pages"]), chunk_count=0,
+                    preview=snapshot["preview"]["chunks"][0]["content"][:160],
                     original=raw, uploaded_by=user_id,
-                ), chunks, vectors))
+                ), snapshot, vectors))
             if len(prepared) != 3:
                 raise ValueError("初始模拟制度应为三份，重置已取消")
             async with self.db.sessions.begin() as session:
                 for model in (Conversation, Chunk, DocumentParse, Document, SeedImport):
                     await session.execute(delete(model))
-                for document, chunks, vectors in prepared:
+                for document, snapshot, vectors in prepared:
                     session.add(document)
                     await session.flush()
-                    session.add_all([
-                        Chunk(document_id=document.id, **chunk, vector=vector.tobytes())
-                        for chunk, vector in zip(chunks, vectors, strict=True)
-                    ])
+                    self.store_index(session, document, snapshot, vectors)
                     session.add(SeedImport(sha256=document.sha256))
         return {"ok": True, "document_count": len(prepared)}
 
@@ -115,42 +150,24 @@ class KnowledgeBase:
             async with self.db.sessions() as session:
                 if await session.scalar(select(Document.id).where(Document.sha256 == digest)):
                     raise DuplicateDocument("该 PDF 已在知识库中，无需重复上传")
-            scan_pages = []
-            pages = await asyncio.to_thread(extract_pages, raw, scan_pages=scan_pages)
-            snapshot = None
-            if scan_pages:
-                parsed = await asyncio.to_thread(self.ocr.parse, raw, scan_pages)
-                title = parsed["sections"][0]["content"][:160]
-                preview = await asyncio.to_thread(indexed_preview, parsed, title, self.embeddings)
-                snapshot = {"parsed": parsed, "preview": preview}
-                chunks = [{"page": c["pages"][0], "ordinal": c["ordinal"], "content": c["content"]}
-                          for c in preview["chunks"]]
-                pages = ["\n".join(line["text"] for line in p["lines"]) for p in parsed["pages"]]
-            else:
-                title = next(text for text in pages if text).splitlines()[0][:160]
-                chunks = await asyncio.to_thread(self.embeddings.split, title, pages)
-            vectors = await asyncio.to_thread(self.embeddings.passages, title, chunks)
+            title, snapshot, vectors = await self.prepare(filename, raw)
             document = Document(
-                title=title, filename=filename, sha256=digest, page_count=len(pages),
-                chunk_count=len(chunks), preview=next(text for text in pages if text)[:160],
+                title=title, filename=filename, sha256=digest,
+                page_count=len(snapshot["preview"]["pages"]), chunk_count=0,
+                preview=snapshot["preview"]["chunks"][0]["content"][:160],
                 original=raw, uploaded_by=user_id,
             )
             async with self.db.sessions() as session:
                 session.add(document)
                 try:
                     await session.flush()
-                    if snapshot is not None:
-                        session.add(DocumentParse(document_id=document.id, payload=snapshot))
-                    session.add_all([
-                        Chunk(document_id=document.id, **chunk, vector=vector.tobytes())
-                        for chunk, vector in zip(chunks, vectors, strict=True)
-                    ])
+                    self.store_index(session, document, snapshot, vectors)
                     await session.commit()
                 except IntegrityError:
                     await session.rollback()
                     raise DuplicateDocument("该 PDF 已在知识库中，无需重复上传") from None
             logger.info("PDF 索引完成 document_id=%s pages=%d chunks=%d",
-                        document.id, len(pages), len(chunks))
+                        document.id, document.page_count, document.chunk_count)
             return public_document(document)
 
     async def documents(self, query=""):
@@ -186,7 +203,7 @@ class KnowledgeBase:
                 parsed = await session.get(DocumentParse, document_id)
             ordinals = ([c["ordinal"] for c in parsed.payload["preview"]["chunks"]
                          if page in c["pages"]] if parsed else [])
-            statement = statement.where(or_(Chunk.page == page, Chunk.ordinal.in_(ordinals)))
+            statement = statement.where(Chunk.ordinal.in_(ordinals))
         async with self.db.sessions() as session:
             rows = (await session.execute(statement.order_by(
                 Chunk.document_id, Chunk.ordinal,
@@ -201,18 +218,17 @@ class KnowledgeBase:
         ordinals = {chunk.id: chunk.ordinal for chunk, _ in rows}
         for hit in result:
             snapshot = snapshots.get(hit["id"])
-            if snapshot:
-                chunk = snapshot["chunks"][ordinals[hit["chunk_id"]]]
-                hit["pages"] = chunk["pages"]
-                hit["warnings"] = snapshot["warnings"] + chunk["warnings"]
-                if page is not None and page in chunk["pages"]:
-                    hit["page"] = page
-                    hit["citation"] = f"/api/documents/{hit['id']}#page={page}"
+            chunk = snapshot["chunks"][ordinals[hit["chunk_id"]]]
+            hit.update(pages=chunk["pages"], source=chunk["source"], body=chunk["content"],
+                       warnings=snapshot["warnings"] + chunk["warnings"])
+            if page is not None:
+                hit["page"] = page
+                hit["citation"] = f"/api/documents/{hit['id']}#page={page}"
         logger.info("知识检索 candidates=%d hits=%d", len(rows), len(result))
         return result
 
     def rank(self, query, rows, exact_page=False):
-        corpus = [terms(title + " " + chunk.content) for chunk, title in rows]
+        corpus = [terms(chunk.content) for chunk, _ in rows]
         query_terms = terms(query)
         lexical = BM25Okapi(corpus).get_scores(query_terms) if any(corpus) else np.zeros(len(rows))
         query_vector = self.embeddings.query(query)

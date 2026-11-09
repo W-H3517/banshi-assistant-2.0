@@ -11,11 +11,13 @@ interface Chunk {
   token_count: number; regions: Region[]; location_status: 'complete' | 'partial' | 'unlocated';
   needs_review?: boolean; over_budget?: boolean; row?: number; header_pages?: number[];
   warnings?: string[];
+  source: { document_title: string; filename: string; chapter: string; article: string };
+  retrieval_text: string;
 }
 interface Preview {
   pages: { number: number; width: number; height: number }[];
   chunks: Chunk[]; removed_line_count: number;
-  active_for_search: boolean; ocr_pages?: number[]; warnings?: string[];
+  ocr_pages?: number[]; warnings?: string[];
 }
 const props = defineProps<{ document: Document }>()
 const emit = defineEmits<{ close: [] }>()
@@ -116,7 +118,7 @@ onBeforeUnmount(() => {
 
 <template>
   <el-dialog v-model="visible" :title="`切分预览 · ${document.title}`" width="96vw" top="3vh" destroy-on-close @closed="emit('close')">
-    <p class="preview-note">{{ result?.active_for_search ? '当前检索片段 · 按自然段切分，同段跨行、跨页同色。' : '候选切分 · 不改变聊天检索。' }}悬停查看，点击固定。</p>
+    <p class="preview-note">当前检索片段 · 已融合文件、章节和条目信息。悬停查看，点击固定；跨行、跨页同色。</p>
     <div v-if="error" class="preview-error"><el-alert :title="error" type="error" :closable="false" /><el-button :disabled="loading" @click="load">重试</el-button></div>
     <div v-loading="loading" element-loading-text="正在加载 PDF 和切分结果…" class="preview-body">
       <template v-if="result && pdf">
@@ -124,7 +126,7 @@ onBeforeUnmount(() => {
           <div class="preview-toolbar">
             <span>页码</span><el-input-number v-model="page" :min="1" :max="result.pages.length" :precision="0" size="small" aria-label="PDF 页码" @change="jumpPage" />
             <span>/ {{ result.pages.length }}</span><el-button size="small" @click="fitWidth">适应宽度</el-button>
-            <span>{{ result.chunks.length }} 个{{ result.active_for_search ? '检索' : '候选' }}片段</span>
+            <span>{{ result.chunks.length }} 个检索片段</span>
           </div>
           <div ref="scrollArea" class="pdf-scroll">
             <div v-for="item in result.pages" :key="item.number" :data-page="item.number" class="pdf-sheet" :style="{ width: `${pageWidth}px` }">
@@ -148,18 +150,21 @@ onBeforeUnmount(() => {
           <div v-if="choices.length > 1" class="overlap-choices"><p>此处属于多个片段，点击固定后可切换：</p><el-button v-for="id in choices" :key="id" size="small" :type="activeId === id ? 'primary' : 'default'" @click="switchOverlap(id)">{{ id + 1 }}</el-button></div>
           <template v-if="active">
             <h3>片段 {{ active.ordinal + 1 }} · {{ active.title }}</h3>
-            <p>{{ active.chapter }} · {{ active.token_count }} tokens</p>
+            <p>文件：{{ active.source.filename }}</p>
+            <p>章节：{{ active.source.chapter || '未明确识别' }}<span v-if="active.source.article"> · {{ active.source.article }}</span></p>
+            <p>含所属信息 {{ active.token_count }} tokens</p>
             <p>PDF {{ active.pages.join('、') }} 页 <span v-if="active.pages.length > 1">· 跨页片段</span></p>
             <p :class="{ 'location-warning': active.location_status !== 'complete' }">{{ statusLabels[active.location_status] }}</p>
             <p v-if="active.needs_review && active.row !== undefined" class="location-warning">表格第 {{ active.row }} 行 · 字段关系待核对；表头来源第 {{ active.header_pages?.join('、') }} 页。高亮为本行实际来源单元格。</p>
             <p v-for="warning in active.warnings || []" :key="warning" class="location-warning">{{ warning }}</p>
             <el-tag v-if="active.over_budget" type="warning">超过模型输入上限</el-tag>
             <pre>{{ active.content }}</pre>
+            <details><summary>查看用于检索的完整片段</summary><pre>{{ active.retrieval_text }}</pre></details>
             <p v-if="pinned === active.ordinal" class="preview-note">已固定，点击 PDF 空白处取消。</p>
           </template>
           <p v-else class="preview-note">将鼠标移到高亮区域查看片段，或从上方选择。</p>
           <p v-for="warning in result.warnings || []" :key="warning" class="location-warning">{{ warning }}</p>
-          <p v-if="!result.ocr_pages?.length" class="preview-note">已排除 {{ result.removed_line_count }} 行页边文字。表格表头推断仍需核对。</p>
+          <p class="preview-note">纯标题作为所属信息保留，不单独建片段。已排除 {{ result.removed_line_count }} 行页边文字。</p>
         </aside>
       </template>
     </div>
