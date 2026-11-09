@@ -14,7 +14,7 @@
 ## 首次准备
 
 ```powershell
-cd 'D:\公司文件\banshi-assistant-2.0'
+cd 'E:\CompanyFiles\TaskAssistant2.0'
 uv sync --locked
 npm --prefix frontend ci
 # 首次下载中文嵌入模型并验证本地 CPU 推理；已准备好后无需重复执行
@@ -69,6 +69,16 @@ npm --prefix frontend run dev
 ```powershell
 npm --prefix frontend run build
 ```
+
+当前项目已移至 `E:\CompanyFiles\TaskAssistant2.0`，原有 Node 24.12.0 执行上述命令已通过。
+
+若 Windows 下构建在模块转换后直接退出（`-1073740791`），先检查 Node 版本和完整路径。此次原因是 Node 24.12.0 在中文路径下清理旧产物时崩溃；可使用全英文路径，或升级到包含修复的 Node 版本（24 分支至少 24.13.1，见[官方修复记录](https://nodejs.org/en/blog/release/v24.13.1)）。也可临时指定已验证的运行时：
+
+```powershell
+npm exec --yes --package=node@24.13.1 --call "npm --prefix frontend run build"
+```
+
+首次执行需联网下载。改名之前关闭占用目录的程序，改名后重新打开项目并更新路径引用；保留默认产物清理，勿以 `emptyOutDir: false` 长期绕过问题。
 
 然后启动后端，不需要 Vite：
 
