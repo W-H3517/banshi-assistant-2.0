@@ -1,4 +1,4 @@
-"""文字 PDF 解析；页码始终使用从 1 开始的物理页码。"""
+"""PDF 校验与文字层提取；扫描页交由独立 OCR 解析器处理。"""
 
 from io import BytesIO
 
@@ -16,7 +16,7 @@ class InvalidPDF(ValueError):
     pass
 
 
-def extract_pages(raw: bytes) -> list[str]:
+def extract_pages(raw: bytes, *, scan_pages: list[int] | None = None) -> list[str]:
     if not raw.startswith(b"%PDF-"):
         raise InvalidPDF("文件不是有效的 PDF")
     try:
@@ -29,13 +29,15 @@ def extract_pages(raw: bytes) -> list[str]:
             for number, page in enumerate(pdf.pages, 1):
                 text = (page.dedupe_chars().extract_text(x_tolerance=2) or "").strip()
                 if page.images and len(text) < 30:
-                    raise InvalidPDF(f"第 {number} 页可能是扫描件，本版本仅支持文字 PDF")
+                    if scan_pages is None:
+                        raise InvalidPDF(f"第 {number} 页为扫描页，需要使用 OCR 解析")
+                    scan_pages.append(number)
                 if "(cid:" in text:
                     raise InvalidPDF(f"第 {number} 页文字编码无法可靠提取，请重新导出文字 PDF")
                 pages.append(text)
                 page.close()
-            if not any(pages):
-                raise InvalidPDF("PDF 中没有可提取的文字；暂不支持扫描件 OCR")
+            if not any(pages) and not scan_pages:
+                raise InvalidPDF("PDF 中没有可提取的文字")
             if sum(map(len, pages)) > 1_000_000:
                 raise InvalidPDF("PDF 文字过多，请按制度拆分后上传")
             return pages

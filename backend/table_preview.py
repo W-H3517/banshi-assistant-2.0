@@ -21,9 +21,9 @@ def extract_grid(table):
         row = []
         for left, right in pairwise(xs):
             x, y = (left + right) / 2, (top + bottom) / 2
-            match = next(((value, r, c) for (x0, y0, x1, y1), value, r, c in cells
-                          if x0 <= x < x1 and y0 <= y < y1), ("", None, None))
-            row.append({"value": match[0], "source_row": match[1], "source_column": match[2]})
+            match = next(((value, r, c, (x0, y0, x1, y1)) for (x0, y0, x1, y1), value, r, c in cells
+                          if x0 <= x < x1 and y0 <= y < y1), ("", None, None, None))
+            row.append({"value": match[0], "source_row": match[1], "source_column": match[2], "bbox": match[3]})
         grid.append(row)
     return {"grid": grid, "column_positions": xs, "raw_rows": raw}
 

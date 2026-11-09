@@ -31,7 +31,7 @@ class LocalEmbeddings:
         self.tokenizer.no_padding()
         self.lock = threading.Lock()
 
-    def split(self, title: str, pages: list[str]) -> list[dict]:
+    def split(self, title: str, pages: list[str], *, with_offsets=False) -> list[dict]:
         prefix = title[:60] + "\n"
         budget = min(380, 480 - len(self.tokenizer.encode(prefix).ids))
         chunks = []
@@ -55,7 +55,12 @@ class LocalEmbeddings:
                             break
                 boundary = offsets[end - 1][1]
                 content = window[:boundary].strip()
-                chunks.append({"page": page, "ordinal": len(chunks), "content": content})
+                chunk = {"page": page, "ordinal": len(chunks), "content": content}
+                if with_offsets:
+                    prefix_text = window[:boundary]
+                    chunk.update(start=position + len(prefix_text) - len(prefix_text.lstrip()),
+                                 end=position + len(prefix_text.rstrip()))
+                chunks.append(chunk)
                 if position + boundary >= len(text.rstrip()):
                     break
                 position += offsets[max(1, end - 50)][0] if end > 1 else max(1, boundary - 50)

@@ -6,12 +6,13 @@ import re
 import jieba
 import numpy as np
 from rank_bm25 import BM25Okapi
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from .config import ROOT
-from .db import Chunk, Conversation, Document, SeedImport, User
+from .db import Chunk, Conversation, Document, DocumentParse, SeedImport, User
 from .embeddings import LocalEmbeddings
+from .ocr import LocalOCR, indexed_preview
 from .pdf import extract_pages
 
 logger = logging.getLogger(__name__)
@@ -39,16 +40,17 @@ def public_document(doc):
 
 
 class KnowledgeBase:
-    def __init__(self, db, embeddings):
+    def __init__(self, db, embeddings, ocr=None):
         self.db = db
         self.embeddings = embeddings
         self.upload_lock = asyncio.Lock()
+        self.ocr = ocr
 
     @classmethod
     async def create(cls, db, settings):
         logger.info("加载本地中文嵌入模型")
         embeddings = await asyncio.to_thread(LocalEmbeddings, settings.model_cache_dir)
-        return cls(db, embeddings)
+        return cls(db, embeddings, LocalOCR(settings.model_cache_dir))
 
     async def seed(self):
         async with self.db.sessions() as session:
@@ -71,6 +73,7 @@ class KnowledgeBase:
             if await session.get(Document, document_id) is None:
                 return False
             await session.execute(delete(Chunk).where(Chunk.document_id == document_id))
+            await session.execute(delete(DocumentParse).where(DocumentParse.document_id == document_id))
             await session.execute(delete(Document).where(Document.id == document_id))
             await session.commit()
         return True
@@ -94,7 +97,7 @@ class KnowledgeBase:
             if len(prepared) != 3:
                 raise ValueError("初始模拟制度应为三份，重置已取消")
             async with self.db.sessions.begin() as session:
-                for model in (Conversation, Chunk, Document, SeedImport):
+                for model in (Conversation, Chunk, DocumentParse, Document, SeedImport):
                     await session.execute(delete(model))
                 for document, chunks, vectors in prepared:
                     session.add(document)
@@ -112,9 +115,20 @@ class KnowledgeBase:
             async with self.db.sessions() as session:
                 if await session.scalar(select(Document.id).where(Document.sha256 == digest)):
                     raise DuplicateDocument("该 PDF 已在知识库中，无需重复上传")
-            pages = await asyncio.to_thread(extract_pages, raw)
-            title = next(text for text in pages if text).splitlines()[0][:160]
-            chunks = await asyncio.to_thread(self.embeddings.split, title, pages)
+            scan_pages = []
+            pages = await asyncio.to_thread(extract_pages, raw, scan_pages=scan_pages)
+            snapshot = None
+            if scan_pages:
+                parsed = await asyncio.to_thread(self.ocr.parse, raw, scan_pages)
+                title = parsed["sections"][0]["content"][:160]
+                preview = await asyncio.to_thread(indexed_preview, parsed, title, self.embeddings)
+                snapshot = {"parsed": parsed, "preview": preview}
+                chunks = [{"page": c["pages"][0], "ordinal": c["ordinal"], "content": c["content"]}
+                          for c in preview["chunks"]]
+                pages = ["\n".join(line["text"] for line in p["lines"]) for p in parsed["pages"]]
+            else:
+                title = next(text for text in pages if text).splitlines()[0][:160]
+                chunks = await asyncio.to_thread(self.embeddings.split, title, pages)
             vectors = await asyncio.to_thread(self.embeddings.passages, title, chunks)
             document = Document(
                 title=title, filename=filename, sha256=digest, page_count=len(pages),
@@ -125,6 +139,8 @@ class KnowledgeBase:
                 session.add(document)
                 try:
                     await session.flush()
+                    if snapshot is not None:
+                        session.add(DocumentParse(document_id=document.id, payload=snapshot))
                     session.add_all([
                         Chunk(document_id=document.id, **chunk, vector=vector.tobytes())
                         for chunk, vector in zip(chunks, vectors, strict=True)
@@ -166,7 +182,11 @@ class KnowledgeBase:
         if page is not None:
             if not document_id or page < 1:
                 raise ValueError("指定页码时须同时指定有效文档 ID，页码从 1 开始")
-            statement = statement.where(Chunk.page == page)
+            async with self.db.sessions() as session:
+                parsed = await session.get(DocumentParse, document_id)
+            ordinals = ([c["ordinal"] for c in parsed.payload["preview"]["chunks"]
+                         if page in c["pages"]] if parsed else [])
+            statement = statement.where(or_(Chunk.page == page, Chunk.ordinal.in_(ordinals)))
         async with self.db.sessions() as session:
             rows = (await session.execute(statement.order_by(
                 Chunk.document_id, Chunk.ordinal,
@@ -174,6 +194,20 @@ class KnowledgeBase:
         if not rows:
             return []
         result = await asyncio.to_thread(self.rank, query, rows, page is not None)
+        async with self.db.sessions() as session:
+            snapshots = {p.document_id: p.payload["preview"] for p in await session.scalars(
+                select(DocumentParse).where(DocumentParse.document_id.in_({hit["id"] for hit in result})),
+            )}
+        ordinals = {chunk.id: chunk.ordinal for chunk, _ in rows}
+        for hit in result:
+            snapshot = snapshots.get(hit["id"])
+            if snapshot:
+                chunk = snapshot["chunks"][ordinals[hit["chunk_id"]]]
+                hit["pages"] = chunk["pages"]
+                hit["warnings"] = snapshot["warnings"] + chunk["warnings"]
+                if page is not None and page in chunk["pages"]:
+                    hit["page"] = page
+                    hit["citation"] = f"/api/documents/{hit['id']}#page={page}"
         logger.info("知识检索 candidates=%d hits=%d", len(rows), len(result))
         return result
 

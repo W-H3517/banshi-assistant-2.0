@@ -44,13 +44,16 @@ def test_long_text_is_chunked_without_truncating_tail(embeddings):
     assert unusual[-1]["content"].endswith("最终条款")
 
 
-def test_reject_scanned_encrypted_empty_and_broken_pdf():
+def test_detect_scanned_and_reject_encrypted_empty_and_broken_pdf():
     scanned = BytesIO()
     canvas = Canvas(scanned)
     canvas.drawImage(ImageReader(Image.new("RGB", (200, 200), "white")), 20, 20, 500, 700)
     canvas.showPage()
     canvas.save()
-    with pytest.raises(InvalidPDF, match="扫描件"):
+    scan_pages = []
+    assert extract_pages(scanned.getvalue(), scan_pages=scan_pages) == [""]
+    assert scan_pages == [1]
+    with pytest.raises(InvalidPDF, match="OCR"):
         extract_pages(scanned.getvalue())
     with pytest.raises(InvalidPDF, match="加密"):
         extract_pages(make_pdf(["保密制度"], encrypt=StandardEncryption("password")))

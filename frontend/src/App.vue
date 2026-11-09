@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { ChatDotRound, Collection, Document as DocumentIcon, Plus, Search, Upload, ArrowRight, SwitchButton, Close, Menu } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, streamTurn, type User, type Conversation, type Document, type Message } from './api'
 import Markdown from './Markdown.vue'
-import ConversionPreview from './ConversionPreview.vue'
+const ChunkPreview = defineAsyncComponent(() => import('./ChunkPreview.vue'))
 
 const user = ref<User | null>(null)
 const booting = ref(true)
@@ -243,11 +243,11 @@ onUnmounted(() => window.removeEventListener('session-expired', clearSession))
       </section>
       <section v-else class="knowledge-page"><div class="page-heading"><div><p class="eyebrow">KNOWLEDGE BASE</p><h1>制度知识库</h1><p class="muted">查找制度、查看原文，让每一步都有依据。</p></div><div v-if="user.role === 'admin'" class="knowledge-admin-actions"><el-button type="danger" plain :loading="resetting" :disabled="uploading || deleting !== null" @click="resetDemo">重置测试数据</el-button><el-button :disabled="resetting" type="primary" :icon="Upload" :loading="uploading" @click="fileInput?.click()">{{ uploading ? '正在解析并建立索引…' : '上传 PDF' }}</el-button></div><input ref="fileInput" type="file" accept=".pdf,application/pdf" hidden @change="upload" /></div>
         <div class="knowledge-toolbar"><el-input v-model="search" placeholder="输入问题或关键词搜索制度" maxlength="300" :prefix-icon="Search" clearable @keyup.enter="guard(loadDocuments)" @clear="guard(loadDocuments)" /><el-button @click="guard(loadDocuments)">搜索</el-button><span>{{ documents.length }} 份制度</span></div>
-        <div v-if="documents.length" class="document-grid"><article v-for="doc in documents" :key="doc.id" class="document-entry"><button class="document-card" @click="openDocument(doc.id, doc.match_page)"><div class="document-card-top"><span class="file-icon"><el-icon><DocumentIcon /></el-icon></span><span class="file-type">PDF · {{ doc.page_count }} 页</span></div><h3>{{ doc.title }}</h3><p>{{ doc.preview }}</p><div class="document-card-footer"><span>{{ doc.filename }}</span><span>查看原文 ↗</span></div></button><div v-if="user.role === 'admin'" class="document-actions"><el-button size="small" :disabled="resetting || deleting !== null" @click="inspectionDocument = doc">转换与切分</el-button><el-button type="danger" plain size="small" :loading="deleting === doc.id" :disabled="deleting !== null || resetting" :aria-label="`删除${doc.title}`" @click="deleteDocument(doc)">删除制度</el-button></div></article></div><el-empty v-else description="没有找到匹配的制度，试试其他关键词" />
-        <p class="knowledge-note">{{ user.role === 'admin' ? '支持可复制文字的 PDF，单份不超过 20 MB、200 页；暂不支持扫描件和加密文件。解析完成后即可查询。' : '制度由管理员维护，所有登录成员均可查询。' }}</p>
+        <div v-if="documents.length" class="document-grid"><article v-for="doc in documents" :key="doc.id" class="document-entry"><button class="document-card" @click="openDocument(doc.id, doc.match_page)"><div class="document-card-top"><span class="file-icon"><el-icon><DocumentIcon /></el-icon></span><span class="file-type">PDF · {{ doc.page_count }} 页</span></div><h3>{{ doc.title }}</h3><p>{{ doc.preview }}</p><div class="document-card-footer"><span>{{ doc.filename }}</span><span>查看原文 ↗</span></div></button><div v-if="user.role === 'admin'" class="document-actions"><el-button size="small" :disabled="resetting || deleting !== null" @click="inspectionDocument = doc">切分预览</el-button><el-button type="danger" plain size="small" :loading="deleting === doc.id" :disabled="deleting !== null || resetting" :aria-label="`删除${doc.title}`" @click="deleteDocument(doc)">删除制度</el-button></div></article></div><el-empty v-else description="没有找到匹配的制度，试试其他关键词" />
+        <p class="knowledge-note">{{ user.role === 'admin' ? '支持文字及扫描 PDF，单份不超过 20 MB、200 页；扫描页会在本机识别，耗时较长，完成后即可查询。暂不支持加密文件。' : '制度由管理员维护，所有登录成员均可查询。' }}</p>
       </section>
     </main>
-    <ConversionPreview v-if="inspectionDocument && user.role === 'admin'" :document="inspectionDocument" @close="inspectionDocument = null" />
+    <ChunkPreview v-if="inspectionDocument && user.role === 'admin'" :document="inspectionDocument" @close="inspectionDocument = null" />
     <el-drawer v-model="documentOpen" :title="selectedDocument?.title || '制度原文'" size="min(980px, 100vw)" destroy-on-close><div v-if="selectedDocument" class="document-reader"><div class="reader-meta"><span>{{ selectedDocument.filename }}</span><el-tag size="small" effect="plain">制度原文</el-tag></div><div class="pdf-controls"><span>定位到第</span><el-input-number v-model="documentPage" :min="1" :max="selectedDocument.page_count" :precision="0" size="small" aria-label="PDF 页码" /><span>页 / 共 {{ selectedDocument.page_count }} 页</span><a :href="pdfUrl" target="_blank" rel="noopener noreferrer">新窗口打开原文 ↗</a></div><iframe :key="pdfUrl" :src="pdfUrl" class="pdf-frame" title="制度 PDF 原文"></iframe><p class="knowledge-note">引用使用 PDF 物理页码。若内嵌预览不可用，请在新窗口打开原文。</p></div></el-drawer>
   </div>
 </template>

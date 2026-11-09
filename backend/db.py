@@ -68,6 +68,14 @@ class SeedImport(Base):
     sha256: Mapped[str] = mapped_column(String, primary_key=True)
 
 
+class DocumentParse(Base):
+    """扫描/混合 PDF 的解析快照，与原文及检索片段同事务保存。"""
+
+    __tablename__ = "document_parses"
+    document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), primary_key=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+
+
 class Chunk(Base):
     __tablename__ = "chunks"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
