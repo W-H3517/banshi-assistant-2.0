@@ -31,21 +31,19 @@ class LocalEmbeddings:
         self.tokenizer.no_padding()
         self.lock = threading.Lock()
 
-    def split(self, context: str, text: str) -> list[dict]:
-        """上下文计入输入预算；正常段落完整保留，超长时按句界拆分并保留 offsets。"""
-        if len(self.tokenizer.encode(context).ids) > 380 or len(context) > 700:
-            raise ValueError("文件及章节信息过长，请缩短文件名或核对标题层级")
+    def split(self, text: str) -> list[dict]:
+        """正文单独计入预算；超长时按句界拆分，保留原文 offsets。"""
         chunks, position = [], 0
         while position < len(text):
-            window = text[position:position + 1000 - len(context)]
+            window = text[position:position + 1000]
             offsets = self.tokenizer.encode(window, add_special_tokens=False).offsets
             if not offsets:
                 position += len(window)
                 continue
-            budget = 510 - len(self.tokenizer.encode(context).ids)
+            budget = 510
             count = min(budget, len(offsets))
             boundary = offsets[count - 1][1]
-            while count > 1 and len(self.tokenizer.encode(context + window[:boundary]).ids) > 512:
+            while count > 1 and len(self.tokenizer.encode(window[:boundary]).ids) > 512:
                 count -= 1
                 boundary = offsets[count - 1][1]
             if position + boundary < len(text.rstrip()):

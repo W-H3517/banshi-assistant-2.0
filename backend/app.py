@@ -48,7 +48,7 @@ def create_app(settings=None, *, agent_factory=create_agent):
             await db.initialize()
             app.state.db = db
             db.knowledge = await KnowledgeBase.create(db, settings)
-            await db.knowledge.rebuild()
+            await db.knowledge.check_index()
             await db.knowledge.seed()
             app.state.chat = ChatService(db, settings, agent_factory, logs.instrumentation)
             try:

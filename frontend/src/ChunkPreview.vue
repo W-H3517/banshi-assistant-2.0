@@ -13,6 +13,8 @@ interface Chunk {
   warnings?: string[];
   source: { document_title: string; filename: string; chapter: string; article: string };
   retrieval_text: string;
+  boundary_status: 'confirmed' | 'uncertain' | 'broken';
+  boundary_reasons: string[];
 }
 interface Preview {
   pages: { number: number; width: number; height: number }[];
@@ -152,7 +154,9 @@ onBeforeUnmount(() => {
             <h3>片段 {{ active.ordinal + 1 }} · {{ active.title }}</h3>
             <p>文件：{{ active.source.filename }}</p>
             <p>章节：{{ active.source.chapter || '未明确识别' }}<span v-if="active.source.article"> · {{ active.source.article }}</span></p>
-            <p>含所属信息 {{ active.token_count }} tokens</p>
+            <p>正文 {{ active.token_count }} tokens</p>
+            <p>阅读边界：{{ active.boundary_status === 'confirmed' ? '已按结构确认' : '需核对原页' }}（不代表全文识别无误）</p>
+            <p v-for="reason in active.boundary_reasons" :key="reason" class="location-warning">{{ reason }}</p>
             <p>PDF {{ active.pages.join('、') }} 页 <span v-if="active.pages.length > 1">· 跨页片段</span></p>
             <p :class="{ 'location-warning': active.location_status !== 'complete' }">{{ statusLabels[active.location_status] }}</p>
             <p v-if="active.needs_review && active.row !== undefined" class="location-warning">表格第 {{ active.row }} 行 · 字段关系待核对；表头来源第 {{ active.header_pages?.join('、') }} 页。高亮为本行实际来源单元格。</p>
@@ -164,7 +168,7 @@ onBeforeUnmount(() => {
           </template>
           <p v-else class="preview-note">将鼠标移到高亮区域查看片段，或从上方选择。</p>
           <p v-for="warning in result.warnings || []" :key="warning" class="location-warning">{{ warning }}</p>
-          <p class="preview-note">纯标题作为所属信息保留，不单独建片段。已排除 {{ result.removed_line_count }} 行页边文字。</p>
+          <p class="preview-note">纯标题作为所属信息保留，不单独建片段。已排除 {{ result.removed_line_count }} 个页边、脚注或目录块；原页核验仍可读取。</p>
         </aside>
       </template>
     </div>

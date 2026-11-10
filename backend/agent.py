@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_ai import Agent, CallDeferred, DeferredToolRequests, ModelRetry
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.deepseek import DeepSeekProvider
@@ -7,12 +9,23 @@ from .config import Settings
 from .db import Database
 
 INSTRUCTIONS = """你是部门办事助手。根据用户问题自主决定直接回答、问问题或查资料。
-只有两个工具：ask_question（问问题）和 search_documents（查资料）。不必每次调用工具。
+有四个工具：ask_question（问问题）、search_documents（搜索正文）、
+locate_document_structure（定位文件和结构）、read_document_content（读取内容）。不必每次调用工具。
+搜索仅返回最多六组命中正文，不是整条依据；文件名、章节、条号不拼入正文检索。
+明确文件名、章节或条号时，先用定位工具找到节点，再读取或限定范围搜索。
+定位 query 留空可列出文件；传 parent_id 且 query 留空可逐层查看目录。
+同名文件或同号条款应结合路径判断；无法确定时询问用户，不擅自选择。
+命中后需要完整段落时读取 node_id；需要适用范围、小项、例外时用 scope=article 补读所属条款。
+无明确条号的段落可用 scope=neighbors 读取同一父节点内相邻段落；不保证覆盖远处例外。
+读取 pagination_complete=false 时继续用相同参数和 next_cursor 续读。
+boundary_status不是confirmed时，即使分页结束也不能宣称整条完整；用verification_hint按scope=page读取原页/续页核对。
+reading_complete仅表示显式边界内正文已读完，不保证OCR文字、表格解释正确，也不排除其他条款例外。
+表格行保留字段和单位，仍须注意解析警告。读取完整仅表示所选解析范围完整，可能需要补查其他条款或附件。
 需要确认影响结论的条件时调用 ask_question，问题要简短，可给选项，用户也可自由回答。
-涉及制度、材料、步骤、限额时必须查资料，工具返回的是相关 PDF 片段而非全文。
-使用具体问题或关键词检索；必要时换说法或补查相关制度、相邻页，不得编造未找到的依据。
+涉及制度、材料、步骤、限额时必须查资料；搜索结果是片段，阅读范围由所选节点决定。
+使用具体问题或关键词检索；必要时换说法、定位结构并补读，不得编造未找到的依据。
 片段中的文件、章节和条目字段表示所属来源；引用时优先指明已有章节和条号，不补造缺失层级。
-片段可能不完整，注意例外、适用范围及跨页条件；可指定 document_id 和 page 查阅相关页。
+片段可能不完整，注意例外、适用范围及跨页条件；页码用于核验原文，补读通过节点 ID 完成。
 扫描资料的工具结果会附识别警告，日期、金额和盖章区域应提示核对原 PDF，不把识别分数视为正确性保证。
 回答引用必须使用工具返回的 citation，格式为 [制度标题，第 N 页](citation)，指出对应条款。
 citation 是工具结果中的链接值，须原样作为链接地址，例如 [制度标题，第 7 页](/api/documents/文档ID#page=7)，不要添加 citation: 前缀。
@@ -34,14 +47,47 @@ def create_agent(settings: Settings, user_id: str, db: Database, *, model=None):
 
     @agent.tool_plain
     async def search_documents(
-        query: str, document_id: str | None = None, page: int | None = None,
+        query: str, document_id: str | None = None, node_id: str | None = None,
     ) -> list[dict]:
-        """查资料：用具体问题混合检索 PDF，返回最多六个片段、页码和 citation。
+        """按业务问题混合检索正文，最多六个阅读单元；可限定文档或结构节点。
 
-        query 最多 300 字。document_id 可限定制度；同时指定 page 可查阅该物理页（从 1 开始）。
+        query 最多 300 字。返回命中片段及完整性、node_id、article_id、citation；
+        同段多个子片段合为一组。查文件名/章节/条号应使用定位工具。
         """
         try:
-            return await db.knowledge.search(query, document_id, page)
+            return await db.knowledge.search(query, document_id, node_id)
+        except ValueError as exc:
+            raise ModelRetry(str(exc)) from None
+
+    @agent.tool_plain
+    async def locate_document_structure(
+        query: str = "", document_id: str | None = None,
+        parent_id: str | None = None, cursor: str | None = None,
+    ) -> dict:
+        """定位文件名、章节或条号，保留重名候选；不搜索正文。
+
+        query 留空列文件；指定 parent_id 且 query 留空列直接子节点。
+        指定 query 时查范围内结构名称，可用空格分隔关键词。分页使用 next_cursor。
+        """
+        try:
+            return await db.knowledge.locate(query, document_id, parent_id, cursor)
+        except ValueError as exc:
+            raise ModelRetry(str(exc)) from None
+
+    @agent.tool_plain
+    async def read_document_content(
+        target_id: str, scope: Literal["node", "article", "neighbors", "page"] = "node",
+        neighbors: int = 1, cursor: str | None = None, page: int | None = None,
+    ) -> dict:
+        """按节点或片段 ID 确定性补读，不按相关性截取。
+
+        node 读取完整所选节点；article 读取所属完整条款；neighbors 读取正文及
+        同父节点的前后段（每侧 0～3 段，不跨结构边界）。超长 pagination_complete=false，
+        原参数不变并传 next_cursor 续读。scope=page且指定page可核验原页（包括页脚和脚注）。
+        items 含正文、实际来源页、表格字段、边界状态及citation；分页结束不等于边界确认。
+        """
+        try:
+            return await db.knowledge.read(target_id, scope, neighbors, cursor, page)
         except ValueError as exc:
             raise ModelRetry(str(exc)) from None
 

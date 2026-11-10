@@ -189,7 +189,7 @@ def test_agent_tools_question_resume_and_failure(tmp_path, log_mode, capsys):
         assert body["thinking"] == {"type": "disabled"}
         assert body["stream"] is True
         assert {item["function"]["name"] for item in body["tools"]} == {
-            "search_documents", "ask_question",
+            "search_documents", "ask_question", "locate_document_structure", "read_document_content",
         }
         if state["fail"]:
             return httpx2.Response(401, json={"error": {"message": "private-key-body"}})

@@ -2,14 +2,14 @@ from copy import deepcopy
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from backend.app import create_app
 from backend.config import Settings
-from backend.db import Chunk, Document, DocumentParse
+from backend.db import DocumentParse
 from backend.embeddings import LocalEmbeddings
-from backend.indexing import INDEX_VERSION, assign_context, build_chunks, prepare_document
-from backend.ocr import restore_paragraphs
+from backend.indexing import assign_context, build_chunks, prepare_document
+from backend.pdf_structure import assemble_document
 from tests_stage2.pdf_helpers import make_pdf
 from tests_stage2.test_app import login
 
@@ -30,9 +30,8 @@ def test_native_context_is_embedded_and_titles_are_not_chunks():
     assert chunks[1]['source']['article'] == '第二条'
     for chunk in chunks:
         assert chunk['content'].startswith(chunk['source']['article'])
-        for key in ('document_title', 'filename', 'chapter', 'article'):
-            assert chunk['source'][key] in chunk['retrieval_text']
-        assert chunk['retrieval_text'].endswith(chunk['content'])
+        assert chunk['retrieval_text'] == chunk['content']
+        assert '文件：' not in chunk['retrieval_text']
         assert chunk['token_count'] == len(embeddings.tokenizer.encode(chunk['retrieval_text']).ids)
         assert chunk['location_status'] == 'complete'
 
@@ -49,7 +48,13 @@ def test_ocr_heading_and_article_survive_page_break_without_extra_title_chunks()
          'lines': [line('按规定等级乘坐。',50,100), line('二、报销手续',100,150),
                    line('1.凭证要求。应当提交完整凭证。',80,200), line('特此通知。',50,250)]},
     ]
-    parsed = {'pages': pages, 'sections': restore_paragraphs(pages)}
+    for page in pages:
+        page['blocks'] = [{'id': f"p{page['number']}:b{i}", 'page': page['number'], 'kind': 'text',
+                              'text': line['text'], 'boxes': line['boxes'], 'confidence': line['confidence'],
+                              'method': 'ocr', 'bbox': [line['polygon'][0][0], line['polygon'][0][1],
+                                                  line['polygon'][2][0], line['polygon'][2][1]], 'edge': False}
+                          for i,line in enumerate(page.pop('lines'))]
+    parsed = assemble_document(pages, '出差通知')
     assign_context(parsed['sections'], '出差通知')
     chunks = build_chunks(parsed, '出差通知', '通知原件.pdf', LocalEmbeddings(Settings().model_cache_dir))['chunks']
     assert chunks[0]['source']['chapter'] == '一、规范出行'
@@ -71,58 +76,20 @@ def test_nested_headings_keep_article_and_do_not_leak_to_next_article():
     assert sections[7]['article'] == '1.标准' and sections[7]['chapter'] == '第二章费用'
 
 
-def test_rebuild_replaces_old_index_atomically_and_keeps_originals(tmp_path, monkeypatch):
+def test_old_index_is_rejected_without_migration(tmp_path):
     with TestClient(create_app(Settings(data_dir=tmp_path))) as client:
         login(client)
-        before = client.get('/api/documents').json()
-        originals = {doc['id']: client.get(f"/api/documents/{doc['id']}/file").content for doc in before}
-        conversation = client.post('/api/conversations').json()
         kb = client.app.state.db.knowledge
-
         async def make_obsolete():
             async with kb.db.sessions.begin() as session:
                 for snapshot in await session.scalars(select(DocumentParse)):
                     payload = deepcopy(snapshot.payload)
                     payload['version'] = 'discarded-test-index'
                     snapshot.payload = payload
-                await session.execute(update(Chunk).values(content='旧索引正文'))
-                return set(await session.scalars(select(Chunk.id)))
-        old_ids = client.portal.call(make_obsolete)
-        original_prepare = kb.prepare
-        calls = 0
-        async def fail_second(*args):
-            nonlocal calls
-            calls += 1
-            if calls == 2:
-                raise RuntimeError('simulated indexing failure')
-            return await original_prepare(*args)
-        monkeypatch.setattr(kb, 'prepare', fail_second)
-        with pytest.raises(RuntimeError, match='simulated'):
-            client.portal.call(kb.rebuild)
+        client.portal.call(make_obsolete)
+        with pytest.raises(ValueError, match='旧索引'):
+            client.portal.call(kb.check_index)
         async def inspect():
             async with kb.db.sessions() as session:
-                return (set(await session.scalars(select(Chunk.id))),
-                        list(await session.scalars(select(Chunk.content))),
-                        [s.payload['version'] for s in await session.scalars(select(DocumentParse))])
-        ids, content, versions = client.portal.call(inspect)
-        assert ids == old_ids and set(content) == {'旧索引正文'}
-        assert set(versions) == {'discarded-test-index'}
-        monkeypatch.setattr(kb, 'prepare', original_prepare)
-        assert client.portal.call(kb.rebuild) == len(before)
-        ids, content, versions = client.portal.call(inspect)
-        assert not ids.intersection(old_ids) and all(c.startswith('文件：') for c in content)
-        assert set(versions) == {INDEX_VERSION}
-        assert client.portal.call(kb.rebuild) == 0
-        for doc in before:
-            path = f"/api/documents/{doc['id']}"
-            assert client.get(path+'/file').content == originals[doc['id']]
-            preview = client.get(path+'/chunk-preview').json()
-            hits = client.portal.call(kb.search, '办理', doc['id'], 1)
-            assert hits
-            assert hits[0]['content'] in [c['retrieval_text'] for c in preview['chunks']]
-            assert hits[0]['source']['filename'] == doc['filename']
-        assert client.get(f"/api/conversations/{conversation['id']}").json() == conversation
-        async def document_ids():
-            async with kb.db.sessions() as session:
-                return set(await session.scalars(select(Document.id)))
-        assert client.portal.call(document_ids) == set(originals)
+                return [p.payload['version'] for p in await session.scalars(select(DocumentParse))]
+        assert set(client.portal.call(inspect)) == {'discarded-test-index'}

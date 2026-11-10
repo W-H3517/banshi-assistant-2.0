@@ -181,15 +181,17 @@ class ChatService:
                         if tool["id"] == event.tool_call_id:
                             tool["status"] = "done"
                             queue.put_nowait({"type": "tool", **tool})
-                    if event.part.tool_name == "search_documents":
+                    if event.part.tool_name in {"search_documents", "read_document_content"}:
                         content = event.part.content
+                        if isinstance(content, dict):
+                            content = content.get("items", [])
                         if isinstance(content, list):
                             for doc in content:
-                                source = {"id": doc["id"], "title": doc["title"],
-                                          "page": doc["page"]}
-                                if source not in assistant["sources"]:
-                                    assistant["sources"].append(source)
-                                    queue.put_nowait({"type": "source", **source})
+                                for page in doc.get("pages", [doc["page"]]):
+                                    source = {"id": doc["id"], "title": doc["title"], "page": page}
+                                    if source not in assistant["sources"]:
+                                        assistant["sources"].append(source)
+                                        queue.put_nowait({"type": "source", **source})
                 if text:
                     assistant["text"] += text
                     queue.put_nowait({"type": "delta", "text": text})

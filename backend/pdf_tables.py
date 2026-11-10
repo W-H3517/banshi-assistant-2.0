@@ -31,10 +31,18 @@ def extract_grid(table):
 def describe_tables(sections, document_title):
     tables, previous = [], None
     caption = ""
+    caption_sections = []
     for section in sections:
         if section["kind"] != "table":
-            caption = section["content"] if section["kind"] == "text" else ""
+            if section["kind"] == "text":
+                caption = section["content"]
+                caption_sections = [section]
+            else:
+                caption, caption_sections = "", []
             continue
+        for caption_section in caption_sections:
+            if "表" in caption_section["content"] and len(caption_section["content"]) < 250:
+                caption_section["retrieval_excluded"] = True
         data = section["table_data"]
         grid = data["grid"]
         width = len(grid[0])
@@ -48,7 +56,8 @@ def describe_tables(sections, document_title):
             header_pages = previous["header_pages"]
             header_rows = 0
             title, unit = previous["title"], previous["unit"]
-            status = "疑似续表：沿用相邻页候选表头，需确认同属一张表；空白数据未跨页继承。"
+            unit_sources = previous["unit_sources"]
+            status = "相邻页列边界一致且无新标题，继承表头；跨页空白数据不推断。"
         else:
             # 用出现数值数据的首行估计表头深度；结果显式标注为候选，不视为已审核。
             first_data = next((i for i, row in enumerate(grid[:5]) if any(
@@ -60,10 +69,18 @@ def describe_tables(sections, document_title):
                                           if row[col]["value"]))
                 headers.append(" / ".join(parts) or f"未识别字段（列 {col + 1}）")
             header_pages = [page]
-            title = caption or section["chapter"]
+            title = caption if "表" in caption else section["chapter"]
             match = re.search(r"单位\s*[:：]\s*([^\n]+)", caption)
             unit = match[1].strip() if match else "未明确识别，请核对表头或注释"
+            unit_sources = [{"page": s["page"], "block_id": s.get("block_id"),
+                             "start": s["start"], "end": s["end"]}
+                            for c in caption_sections for s in c["source_spans"]
+                            if "单位" in c["content"][s["start"]:s["end"]]]
             status = "本页候选表头：根据表格网格和首批数据行识别，请核对字段层级及单位。"
+        table_id = previous["table_id"] if continuation else f"table:{section['id']}"
+        header_cells = previous["header_cells"] if continuation else [
+            {"column": col + 1, "path": headers[col], "page": page,
+             "cells": [row[col] for row in grid[:header_rows]]} for col in range(width)]
         # 同名父级表头横跨多列时保留列号，避免把不同字段拼成一个。
         labels = [f"{label}（列 {i + 1}）" if headers.count(label) > 1 else label
                   for i, label in enumerate(headers)]
@@ -72,15 +89,19 @@ def describe_tables(sections, document_title):
             fields = [{"name": label, **cell} for label, cell in zip(labels, row)]
             body = "；".join(f"{f['name']}：{f['value'] or '空白（未推断）'}" for f in fields)
             descriptions.append({"row": row_index, "page": page, "fields": fields,
-                                 "content": f"制度：{document_title}\n表：{title}\n单位：{unit}\n"
-                                 f"PDF 第 {page} 页，表格第 {row_index} 行。\n{body}",
-                                 "needs_review": True})
+                                 "content": f"表：{title}\n单位：{unit}\n"
+                                 f"{body}",
+                                 "table_id": table_id, "unit": unit, "row_key": [f["value"] for f in fields[:3]],
+                                 "header_cells": header_cells, "needs_review": True})
         tables.append({"section_id": section["id"], "page": page, "title": title,
                        "unit": unit, "headers": labels, "header_pages": header_pages,
                        "header_rows": header_rows, "status": status,
-                       "rows": descriptions, "needs_review": True})
+                       "rows": descriptions, "table_id": table_id, "header_cells": header_cells,
+                       "continuation": bool(continuation), "needs_review": True})
+        tables[-1]["unit_sources"] = unit_sources
         previous = {"page": page, "chapter": section["chapter"], "headers": headers,
                     "header_pages": header_pages, "positions": data["column_positions"],
-                    "title": title, "unit": unit}
+                    "title": title, "unit": unit, "table_id": table_id, "header_cells": header_cells,
+                    "unit_sources": unit_sources}
         caption = ""
     return tables

@@ -1,12 +1,20 @@
-"""文字和扫描 PDF 共用的结构上下文、实际检索文本及高亮映射。"""
+"""文字和扫描 PDF 共用的正文索引、独立来源、结构节点及高亮映射。"""
 
 from pathlib import Path
 
 from .pdf import InvalidPDF, extract_pages
-from .pdf_structure import article_label, convert_pdf, heading_level, region, text_regions
+from .pdf_structure import (
+    article_label,
+    assemble_document,
+    convert_pdf,
+    heading_level,
+    region,
+    text_regions,
+)
 from .pdf_tables import describe_tables
+from .structure import build_structure
 
-INDEX_VERSION = "document-context-v1"
+INDEX_VERSION = "reading-units-v2"
 
 
 def assign_context(sections, title):
@@ -26,14 +34,14 @@ def assign_context(sections, title):
             else:
                 formal_article, article, article_pages = "", "", []
             section["pure_heading"] = True
-        elif section["kind"] not in ("table", "review") and (label := article_label(content)):
+        elif section["kind"] != "table" and (label := article_label(content)):
             if label.startswith("第"):
                 formal_article = label
                 headings = {key: value for key, value in headings.items() if key < 3}
             article = f"{formal_article} / {label}" if formal_article and label != formal_article else label
             article_pages = [section["pages"][0]]
             section["pure_heading"] = content == label
-        if section["kind"] == "review" or content.startswith(("附件：", "附件:")):
+        if content.startswith(("附件：", "附件:")):
             formal_article, article, article_pages = "", "", []
             headings = {}
         elif not article.startswith("第") and content.startswith(("本通知", "特此通知")):
@@ -46,21 +54,21 @@ def assign_context(sections, title):
 
 def prepare_document(raw, filename, embeddings, ocr):
     scan_pages = []
-    texts = extract_pages(raw, scan_pages=scan_pages)
-    if scan_pages:
-        parsed = ocr.parse(raw, scan_pages)
-        title = parsed["sections"][0]["content"][:160]
-    else:
-        title = next(text for text in texts if text).splitlines()[0][:160]
-        parsed = convert_pdf(raw, title)
-    # 单行的完整规定是正文，不把它当作可丢弃的文件标题。
+    extract_pages(raw, scan_pages=scan_pages)
+    parsed = convert_pdf(raw, ocr=ocr, scan_pages=scan_pages)
+    first_text = next((b["text"] for b in parsed["pages"][0]["blocks"]
+                       if b["kind"] == "text" and not b.get("excluded_reason")), Path(filename).stem)
+    title = first_text[:160]
     if title.endswith(("。", "！", "？")):
         title = Path(filename).stem
+    parsed = assemble_document(parsed["pages"], title)
     assign_context(parsed["sections"], title)
     preview = build_chunks(parsed, title, filename, embeddings)
     if not preview["chunks"]:
         raise InvalidPDF("PDF 中只有标题或空白内容，没有可建立索引的正文")
-    return title, {"version": INDEX_VERSION, "parsed": parsed, "preview": preview}
+    structure = build_structure(parsed, preview, title, filename)
+    return title, {"version": INDEX_VERSION, "parsed": parsed, "preview": preview,
+                   "structure": structure}
 
 
 def build_chunks(parsed, title, filename, embeddings):
@@ -68,20 +76,14 @@ def build_chunks(parsed, title, filename, embeddings):
     chunks = []
     ocr_pages = [p["number"] for p in parsed["pages"] if p.get("ocr")]
     for section in parsed["sections"]:
-        if section["pure_heading"]:
+        if section["pure_heading"] or section.get("retrieval_excluded"):
             continue
         source = {"document_title": title, "filename": filename,
                   "chapter": section["chapter"], "article": section["article"]}
-        context = f"文件：{title}\n文件名：{filename}\n"
-        if source["chapter"]:
-            context += f"章节：{source['chapter']}\n"
-        if source["article"]:
-            context += f"条目：{source['article']}\n"
-        context += "正文：\n"
         table = next((t for t in tables if t["section_id"] == section["id"]), None)
         units = table["rows"] if table else [{"content": section["content"]}]
         for unit in units:
-            parts = embeddings.split(context, unit["content"])
+            parts = embeddings.split(unit["content"])
             for part in parts:
                 start, end = part["start"], part["end"]
                 warnings = []
@@ -97,13 +99,11 @@ def build_chunks(parsed, title, filename, embeddings):
                     spans = [s for s in section["source_spans"] if s["start"] < end and s["end"] > start]
                     pages = sorted({s["page"] for s in spans})
                     regions, status = text_regions(section, start, end, parsed["pages"])
-                    if section["kind"] == "review":
-                        warnings.append("落款或印章区域，识别文字及归属需核对")
                     if any(s.get("confidence") is not None and s["confidence"] < .9 for s in spans):
                         warnings.append("含低分识别文字，请对照原文")
                 if len(parts) > 1:
-                    warnings.append("原段落或表格行超过输入预算，已拆分并继承相同所属信息")
-                retrieval_text = context + part["content"]
+                    warnings.append("原段落或表格行超过输入预算，已拆分，可按所属阅读单元补读完整内容")
+                retrieval_text = part["content"]
                 chunk = {"ordinal": len(chunks), "section_id": section["id"],
                          "source": source, "context_pages": section["context_pages"],
                          "title": source["article"] or (table["title"] if table else "正文段落"),
@@ -117,8 +117,8 @@ def build_chunks(parsed, title, filename, embeddings):
                     chunk.update(row=unit["row"], header_pages=table["header_pages"])
                 chunks.append(chunk)
     return {"version": INDEX_VERSION,
-            "pages": [{k: v for k, v in p.items() if k != "lines"} for p in parsed["pages"]],
+            "pages": [{k: v for k, v in p.items() if k != "blocks"} for p in parsed["pages"]],
             "chunks": chunks, "removed_line_count": len(parsed.get("removed_lines", [])),
             "ocr_pages": ocr_pages,
             "warnings": (["扫描识别的日期、数字和印章可能有误；高分不代表正确。",
-                          "扫描页按单栏恢复，表格和多栏需核对原文。"] if ocr_pages else [])}
+                          "扫描页按单栏恢复，扫描表格和多栏需核对原文；文字页保留表格网格。"] if ocr_pages else [])}

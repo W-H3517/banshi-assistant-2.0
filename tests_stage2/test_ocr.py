@@ -14,6 +14,7 @@ from backend.embeddings import LocalEmbeddings
 from backend.indexing import INDEX_VERSION, assign_context, build_chunks
 from backend.ocr import LocalOCR, OCRUnavailable, model_paths
 from backend.pdf import InvalidPDF, extract_pages
+from backend.pdf_structure import convert_pdf
 from tests_stage2.test_app import login
 
 
@@ -63,13 +64,13 @@ def test_paragraph_mapping_mixed_pages_and_long_paragraph_budget(tmp_path, monke
     scanned = []
     pages = extract_pages(raw, scan_pages=scanned)
     assert scanned == [1, 2] and "Native text" in pages[2]
-    parsed = LocalOCR(tmp_path).parse(raw, scanned)
+    parsed = convert_pdf(raw, "通知", ocr=LocalOCR(tmp_path), scan_pages=scanned)
     assert len(calls) == 2
     embeddings = LocalEmbeddings(Settings().model_cache_dir)
     assign_context(parsed["sections"], "通知")
     preview = build_chunks(parsed, "通知", "通知.pdf", embeddings)
     cross_page = next(c for c in preview['chunks'] if len(c['pages']) > 1)
-    assert cross_page['content'] == '1.办理事项。申请人应当提交完整材料并在审核通过后办理。不得提前领取。'
+    assert cross_page['content'].replace('\n', '') == '1.办理事项。申请人应当提交完整材料并在审核通过后办理。不得提前领取。'
     assert cross_page['pages'] == [1, 2] and len(cross_page['regions']) == 3
     assert any('Native text' in c['content'] for c in preview['chunks'])
     for chunk in preview['chunks']:
@@ -114,9 +115,9 @@ def test_scanned_upload_preview_search_restart_and_delete(tmp_path, monkeypatch)
         assert preview['version'] == INDEX_VERSION and preview['ocr_pages'] == [1, 2]
         assert client.get(path+'/file').content == raw
         assert client.get(path+'/chunk-preview').json() == preview and len(calls) == 2
-        hits = client.portal.call(client.app.state.db.knowledge.search, '完整材料', document['id'], 2)
+        hits = client.portal.call(client.app.state.db.knowledge.search, '完整材料', document['id'])
         hit = next(h for h in hits if '不得提前领取' in h['content'])
-        assert hit['pages'] == [1, 2] and hit['page'] == 2 and hit['citation'].endswith('#page=2')
+        assert hit['pages'] == [1, 2] and hit['page'] == 1 and hit['citation'].endswith('#page=1')
         assert hit['warnings']
         async def check_rows():
             async with client.app.state.db.sessions() as session:
@@ -163,4 +164,4 @@ def test_ocr_failure_and_embedding_failure_leave_no_partial_data(tmp_path, monke
 def test_empty_scanned_page_is_not_silently_skipped(tmp_path, monkeypatch):
     monkeypatch.setattr(LocalOCR, 'recognize', lambda *args: [])
     with pytest.raises(InvalidPDF, match='第 1 页未识别到文字'):
-        LocalOCR(tmp_path).parse(scanned_pdf(), [1, 2])
+        convert_pdf(scanned_pdf(), ocr=LocalOCR(tmp_path), scan_pages=[1, 2])
