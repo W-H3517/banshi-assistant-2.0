@@ -225,7 +225,7 @@ def test_agent_tools_question_resume_and_failure(tmp_path, log_mode, capsys):
         assert paused["transcript"][-1]["sources"]
         assert all(item["user_id"] == user["id"] for item in requests)
         assert "培训" in requests[1]["messages"][-1]["content"]
-        tool_content = json.loads(requests[1]["messages"][-1]["content"])
+        tool_content = json.loads(requests[1]["messages"][-1]["content"])["items"]
         assert all("content" in doc and "preview" not in doc for doc in tool_content)
         assert any("450" in doc["content"] for doc in tool_content)
         assert all(doc["page"] >= 1 and doc["citation"].endswith(f"#page={doc['page']}")

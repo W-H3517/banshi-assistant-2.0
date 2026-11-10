@@ -197,7 +197,7 @@ def create_app(settings=None, *, agent_factory=create_agent):
 
     @app.post("/api/conversations", status_code=201)
     async def new_conversation(user: UserDep):
-        row = Conversation(user_id=user.id, model=settings.model)
+        row = Conversation(user_id=user.id, model=settings.conversation_model)
         async with app.state.chat.lifecycle_lock, app.state.db.sessions() as session:
             session.add(row)
             await session.commit()

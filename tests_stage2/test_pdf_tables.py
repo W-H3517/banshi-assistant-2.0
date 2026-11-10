@@ -34,3 +34,20 @@ def test_merged_cells_expand_only_with_actual_geometry():
     assert tables[1]["header_pages"] == [1]
     assert tables[1]["rows"][0]["fields"][0]["value"] == ""
     assert tables[1]["needs_review"] is True
+
+
+def test_header_only_table_keeps_headers_without_inheriting_them_as_data():
+    def cell(value, column):
+        return {"value": value, "bbox": [column * 30, 0, (column + 1) * 30, 20],
+                "source_row": 1, "source_column": column + 1}
+
+    header = {"id": 1, "kind": "table", "chapter": "住宿标准", "pages": [1],
+              "table_data": {"grid": [[cell(v, i) for i, v in enumerate(['序号', '地区', '金额'])]],
+                             "column_positions": [0, 30, 60, 90]}}
+    continuation = deepcopy(header)
+    continuation.update(id=2, pages=[2])
+    continuation["table_data"]["grid"] = [[cell(v, i) for i, v in enumerate(['', '', '300'])]]
+    tables = describe_tables([header, continuation], "住宿标准")
+    assert tables[0]["rows"] == []
+    assert tables[1]["header_pages"] == [1]
+    assert [f["value"] for f in tables[1]["rows"][0]["fields"]] == ['', '', '300']

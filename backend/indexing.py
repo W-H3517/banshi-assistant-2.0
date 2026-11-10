@@ -5,16 +5,16 @@ from pathlib import Path
 from .pdf import InvalidPDF, extract_pages
 from .pdf_structure import (
     article_label,
-    assemble_document,
     convert_pdf,
     heading_level,
     region,
     text_regions,
 )
 from .pdf_tables import describe_tables
+from .rules import build_rule_card
 from .structure import build_structure
 
-INDEX_VERSION = "reading-units-v2"
+INDEX_VERSION = "rule-cards-v3"
 
 
 def assign_context(sections, title):
@@ -41,7 +41,7 @@ def assign_context(sections, title):
             article = f"{formal_article} / {label}" if formal_article and label != formal_article else label
             article_pages = [section["pages"][0]]
             section["pure_heading"] = content == label
-        if content.startswith(("附件：", "附件:")):
+        if section["kind"] == "effect" or content.startswith(("附件：", "附件:")):
             formal_article, article, article_pages = "", "", []
             headings = {}
         elif not article.startswith("第") and content.startswith(("本通知", "特此通知")):
@@ -56,19 +56,14 @@ def prepare_document(raw, filename, embeddings, ocr):
     scan_pages = []
     extract_pages(raw, scan_pages=scan_pages)
     parsed = convert_pdf(raw, ocr=ocr, scan_pages=scan_pages)
-    first_text = next((b["text"] for b in parsed["pages"][0]["blocks"]
-                       if b["kind"] == "text" and not b.get("excluded_reason")), Path(filename).stem)
-    title = first_text[:160]
-    if title.endswith(("。", "！", "？")):
-        title = Path(filename).stem
-    parsed = assemble_document(parsed["pages"], title)
+    title = parsed["document_title"] or Path(filename).stem
     assign_context(parsed["sections"], title)
     preview = build_chunks(parsed, title, filename, embeddings)
     if not preview["chunks"]:
         raise InvalidPDF("PDF 中只有标题或空白内容，没有可建立索引的正文")
     structure = build_structure(parsed, preview, title, filename)
     return title, {"version": INDEX_VERSION, "parsed": parsed, "preview": preview,
-                   "structure": structure}
+                   "structure": structure, "rule_card": build_rule_card(structure)}
 
 
 def build_chunks(parsed, title, filename, embeddings):
@@ -83,13 +78,13 @@ def build_chunks(parsed, title, filename, embeddings):
         table = next((t for t in tables if t["section_id"] == section["id"]), None)
         units = table["rows"] if table else [{"content": section["content"]}]
         for unit in units:
-            parts = embeddings.split(unit["content"])
+            parts = embeddings.split(unit["retrieval_text"] if table else unit["content"])
             for part in parts:
                 start, end = part["start"], part["end"]
                 warnings = []
                 if table:
                     boxes = list(dict.fromkeys(tuple(field["bbox"]) for field in unit["fields"]
-                                               if field["bbox"] is not None))
+                                               if field["bbox"] is not None and not field.get("inherited_from")))
                     regions = [r for box in boxes
                                if (r := region(box, parsed["pages"][unit["page"] - 1]))]
                     status = "complete" if regions and len(regions) == len(boxes) else "partial" if regions else "unlocated"

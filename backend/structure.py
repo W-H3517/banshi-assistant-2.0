@@ -37,7 +37,7 @@ def build_structure(parsed, preview, title, filename):
         label = article_label(content) if section["kind"] != "table" else ""
         if section["kind"] == "document_title":
             continue
-        if content.startswith(("附件：", "附件:")):
+        if section["kind"] == "effect" or content.startswith(("附件：", "附件:")):
             headings, formal, item = {}, None, None
         elif not formal and content.startswith(("本通知", "特此通知")):
             headings, item = {}, None

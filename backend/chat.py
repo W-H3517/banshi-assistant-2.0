@@ -15,6 +15,7 @@ from pydantic_ai.messages import (
     PartStartEvent,
     TextPart,
     TextPartDelta,
+    ToolReturnPart,
 )
 from pydantic_ai.usage import RunUsage, UsageLimits
 from sqlalchemy import select, update
@@ -66,7 +67,7 @@ class ChatService:
             task = self.tasks.get(conversation_id)
             if task is not None and not task.done():
                 raise HTTPException(409, "上一轮正在收尾，请稍后重试")
-            if conversation.model != self.settings.model:
+            if conversation.model != self.settings.conversation_model:
                 raise HTTPException(409, "会话模型与配置不同，请新建会话")
             if conversation.pending:
                 if prompt or set(answers) != {item["id"] for item in conversation.pending}:
@@ -181,10 +182,13 @@ class ChatService:
                         if tool["id"] == event.tool_call_id:
                             tool["status"] = "done"
                             queue.put_nowait({"type": "tool", **tool})
-                    if event.part.tool_name in {"search_documents", "read_document_content"}:
+                    if isinstance(event.part, ToolReturnPart) and event.part.outcome == "success" and event.part.tool_name in {
+                        "search_documents", "read_document_content",
+                    }:
                         content = event.part.content
                         if isinstance(content, dict):
-                            content = content.get("items", [])
+                            content = content.get("items", []) + [rule for card in content.get("rule_cards", [])
+                                                                  for rule in card["rules"]]
                         if isinstance(content, list):
                             for doc in content:
                                 for page in doc.get("pages", [doc["page"]]):

@@ -1,17 +1,23 @@
-from typing import Literal
+from typing import Annotated, Literal
 
+from pydantic import Field
 from pydantic_ai import Agent, CallDeferred, DeferredToolRequests, ModelRetry
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.deepseek import DeepSeekProvider
-from pydantic_ai.settings import ModelSettings
 
 from .config import Settings
 from .db import Database
+from .models import create_model, model_settings
+
+SearchText = Annotated[str, Field(min_length=1, max_length=300)]
+SearchQueries = Annotated[list[SearchText], Field(min_length=2, max_length=4)]
 
 INSTRUCTIONS = """你是部门办事助手。根据用户问题自主决定直接回答、问问题或查资料。
 有四个工具：ask_question（问问题）、search_documents（搜索正文）、
 locate_document_structure（定位文件和结构）、read_document_content（读取内容）。不必每次调用工具。
-搜索仅返回最多六组命中正文，不是整条依据；文件名、章节、条号不拼入正文检索。
+单查询最多六组命中；多事项先拆成2至4个子查询，例如限额与报销方式、伙食与交通分别查询。
+每个子查询最多六组，多查询轮流合并去重、最多24组；不要把参考答案或臆测金额写入查询。
+搜索items不是整条依据；文件名、章节、条号不拼入正文检索。
+搜索自动附带命中文件的rule_cards，每份文件一次；回答前检查其适用范围、效力和外部文件指向。
+引用的外部办法未匹配时不能套用国内或其他文件金额；规则卡也不能替代对冲突条件的判断。
 明确文件名、章节或条号时，先用定位工具找到节点，再读取或限定范围搜索。
 定位 query 留空可列出文件；传 parent_id 且 query 留空可逐层查看目录。
 同名文件或同号条款应结合路径判断；无法确定时询问用户，不擅自选择。
@@ -22,6 +28,7 @@ boundary_status不是confirmed时，即使分页结束也不能宣称整条完�
 reading_complete仅表示显式边界内正文已读完，不保证OCR文字、表格解释正确，也不排除其他条款例外。
 表格行保留字段和单位，仍须注意解析警告。读取完整仅表示所选解析范围完整，可能需要补查其他条款或附件。
 需要确认影响结论的条件时调用 ask_question，问题要简短，可给选项，用户也可自由回答。
+用户已明确给出的条件不重复询问；材料缺失不能靠追问用户事实来代替。用户要求不追问时，说明缺失依据和结论范围。
 涉及制度、材料、步骤、限额时必须查资料；搜索结果是片段，阅读范围由所选节点决定。
 使用具体问题或关键词检索；必要时换说法、定位结构并补读，不得编造未找到的依据。
 片段中的文件、章节和条目字段表示所属来源；引用时优先指明已有章节和条号，不补造缺失层级。
@@ -38,46 +45,56 @@ citation 是工具结果中的链接值，须原样作为链接地址，例如 [
 
 def create_agent(settings: Settings, user_id: str, db: Database, *, model=None):
     agent = Agent(
-        model or OpenAIChatModel(settings.model, provider=DeepSeekProvider(api_key=settings.api_key)),
+        model or create_model(settings),
         output_type=[str, DeferredToolRequests], instructions=INSTRUCTIONS,
-        model_settings=ModelSettings(timeout=120, max_retries=0, extra_body={
-            "user_id": user_id, "thinking": {"type": "disabled"},
-        }),
+        model_settings=model_settings(settings, user_id),
     )
 
-    @agent.tool_plain
+    @agent.tool_plain(strict=False)
     async def search_documents(
-        query: str, document_id: str | None = None, node_id: str | None = None,
-    ) -> list[dict]:
-        """按业务问题混合检索正文，最多六个阅读单元；可限定文档或结构节点。
+        query: SearchText | SearchQueries, document_id: str | None = None, node_id: str | None = None,
+    ) -> dict:
+        """单个问题或2至4个子查询混合检索；可限定文档或结构节点。
 
-        query 最多 300 字。返回命中片段及完整性、node_id、article_id、citation；
+        每个query最多300字。返回items（命中片段）、rule_cards（每份命中文件的规则原文）；
         同段多个子片段合为一组。查文件名/章节/条号应使用定位工具。
+
+        Args:
+            query: 单个业务问题，或2至4个不同的子问题；每个1至300字，不填臆测答案。
+            document_id: 限定文件，使用先前结果的id字段；不填文件名或node_id，省略则搜索全库。
+            node_id: 限定章节或条款子树，使用先前结果的node_id；与document_id同时填写时须属于该文件。
         """
         try:
-            return await db.knowledge.search(query, document_id, node_id)
+            return await db.knowledge.search_bundle(query, document_id, node_id)
         except ValueError as exc:
             raise ModelRetry(str(exc)) from None
 
-    @agent.tool_plain
+    @agent.tool_plain(strict=False)
     async def locate_document_structure(
-        query: str = "", document_id: str | None = None,
+        query: Annotated[str, Field(max_length=300)] = "", document_id: str | None = None,
         parent_id: str | None = None, cursor: str | None = None,
     ) -> dict:
         """定位文件名、章节或条号，保留重名候选；不搜索正文。
 
-        query 留空列文件；指定 parent_id 且 query 留空列直接子节点。
+        query和parent_id均留空列文件；指定 parent_id 且 query 留空列直接子节点。
         指定 query 时查范围内结构名称，可用空格分隔关键词。分页使用 next_cursor。
+
+        Args:
+            query: 文件名、章节名、条号或问题标题关键词，最多300字；不用于搜索正文。
+            document_id: 文件id，可限定定位范围；仅传此参数且query为空仍返回文件节点。
+            parent_id: 已返回的node_id；query为空时列其直接子节点，否则搜索其结构子树。
+            cursor: 上次返回的next_cursor；续页时保持其余参数不变，首次省略。
         """
         try:
             return await db.knowledge.locate(query, document_id, parent_id, cursor)
         except ValueError as exc:
             raise ModelRetry(str(exc)) from None
 
-    @agent.tool_plain
+    @agent.tool_plain(strict=False)
     async def read_document_content(
         target_id: str, scope: Literal["node", "article", "neighbors", "page"] = "node",
-        neighbors: int = 1, cursor: str | None = None, page: int | None = None,
+        neighbors: Annotated[int, Field(ge=0, le=3)] = 1, cursor: str | None = None,
+        page: Annotated[int, Field(ge=1)] | None = None, include_geometry: bool = False,
     ) -> dict:
         """按节点或片段 ID 确定性补读，不按相关性截取。
 
@@ -85,15 +102,29 @@ def create_agent(settings: Settings, user_id: str, db: Database, *, model=None):
         同父节点的前后段（每侧 0～3 段，不跨结构边界）。超长 pagination_complete=false，
         原参数不变并传 next_cursor 续读。scope=page且指定page可核验原页（包括页脚和脚注）。
         items 含正文、实际来源页、表格字段、边界状态及citation；分页结束不等于边界确认。
+        默认省略表格几何明细；必要时按单个节点设置include_geometry=true读取完整字段及坐标。
+
+        Args:
+            target_id: 先前返回的node_id、article_id、unit_id或chunk_id；不能传文件id或自造ID。
+            scope: node读所选节点及其正文子树；article读所属条款；neighbors读同父相邻正文；page核验原页。
+            neighbors: 仅neighbors范围使用，每侧0至3段，默认1段。
+            cursor: 上次next_cursor；续读时包括include_geometry在内的其他参数保持不变。
+            page: 仅scope=page时必填，使用从1开始的PDF物理页码；其他scope省略。
+            include_geometry: 默认false，正文仍完整；需要核对来源坐标时按单个节点设true。
         """
         try:
-            return await db.knowledge.read(target_id, scope, neighbors, cursor, page)
+            return await db.knowledge.read(target_id, scope, neighbors, cursor, page, include_geometry)
         except ValueError as exc:
             raise ModelRetry(str(exc)) from None
 
-    @agent.tool_plain
+    @agent.tool_plain(strict=False)
     async def ask_question(question: str, options: list[str] | None = None) -> str:
-        """问问题：向用户询问缺失条件，可提供可选答案，暂停等待用户实际回答。"""
+        """向用户询问影响结论且尚未提供的事实，暂停等待实际回答。
+
+        Args:
+            question: 一次询问一个必要条件，不重复询问已明确条件，不用来替代检索缺失制度。
+            options: 可选答案列表；省略时允许自由回答，不能代替用户选择。
+        """
         raise CallDeferred()
 
     return agent

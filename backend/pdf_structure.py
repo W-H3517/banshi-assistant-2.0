@@ -8,6 +8,7 @@ from statistics import median
 import pdfplumber
 
 from .pdf import extract_pages
+from .pdf_layout import EFFECT_START, classify_layout
 from .pdf_tables import extract_grid
 
 NUMBER = r"[零〇一二三四五六七八九十百千两\d]+"
@@ -43,6 +44,9 @@ def article_label(text):
         return match[1]
     match = re.match(r"^(\d+[.．、])(?=\D)", text)
     if match:
+        question = re.match(r"^[^。\n]*?[？?]", text)
+        if question:
+            return question[0]
         first = text.split("。", 1)[0]
         return first if "。" in text and len(first) <= 50 else match[1]
     return ""
@@ -145,7 +149,7 @@ def convert_pdf(raw, title="", *, ocr=None, scan_pages=None):
                     kind = "footnote" if size < body_size * .85 and line['top'] > view[1] + info['height'] * .65 else "text"
                     info["blocks"].append({"kind": kind, "text": text, "boxes": boxes,
                                            "bbox": [line["x0"], line["top"], line["x1"], line["bottom"]],
-                                           "confidence": None, "method": "native"})
+                                           "confidence": None, "method": "native", "font_size": size})
                 for table in tables:
                     rows = table.extract()
                     info["blocks"].append({"kind": "table", "text": "\n".join(
@@ -159,6 +163,7 @@ def convert_pdf(raw, title="", *, ocr=None, scan_pages=None):
                              or block["bbox"][3] > view[1] + info["height"] * .9)
             page_info.append(info)
             original.close()
+    title = classify_layout(page_info, title)
     return assemble_document(page_info, title)
 
 
@@ -169,7 +174,7 @@ def assemble_document(pages, title):
     for page in pages:
         for block in page["blocks"]:
             text = block["text"].strip()
-            reason = ""
+            reason = block.get("excluded_reason", "")
             if block["edge"] and (PAGE_NUMBER.fullmatch(text) or text == str(page["number"])):
                 reason, block["kind"] = "页边页码", "page_number"
             elif block["edge"] and edge_counts[text] >= max(3, len(pages) * .6):
@@ -185,6 +190,11 @@ def assemble_document(pages, title):
                 records.append(block)
     sections, current = [], None
     chapter = ""
+    margins = {}
+    for page in pages:
+        xs = sorted(b["bbox"][0] for b in page["blocks"]
+                    if b["kind"] == "text" and b.get("bbox") and not b.get("excluded_reason"))
+        margins[page["number"]] = xs[len(xs) // 5] if xs else None
 
     def finish(boundary):
         if current is not None:
@@ -220,8 +230,9 @@ def assemble_document(pages, title):
             append(row)
             finish("table_grid")
             current = None
-        elif is_title:
-            begin(text, "document_title")
+        elif is_title or row["kind"] == "document_title":
+            if current is None or current["kind"] != "document_title":
+                begin(title or text, "document_title")
             append(row)
         elif is_chapter:
             chapter = text
@@ -230,18 +241,24 @@ def assemble_document(pages, title):
         elif article:
             begin(article, "article")
             append(row)
+        elif EFFECT_START.search(text):
+            begin("效力与执行规定", "effect")
+            append(row)
         elif re.match(r"^附件\s*[:：]", text):
             begin("附件目录", "text")
             append(row)
         else:
+            left = margins[row["page"]]
+            indented = (left is not None and row.get("bbox")
+                        and row["bbox"][0] - left > row.get("font_size", 12) * 1.3)
             if current is None or current["kind"] in ("heading", "document_title") or (
                 current["kind"] == "text" and current["content"].endswith(("。", "！", "？"))
-                and current["source_spans"][-1]["page"] != row["page"]):
-                begin("说明 / 段落", "text", "layout")
+                and (indented or current["source_spans"][-1]["page"] != row["page"])):
+                begin("说明 / 段落", "text", "paragraph_indent" if indented else "layout")
             previous = current["content"]
             separator = ""
             if previous:
-                if previous[-1] in "。！？；" or re.match(r"^[（(][一二三四五六七八九十\d]+[）)]", text):
+                if previous[-1] in "。！？；?" or re.match(r"^[（(][一二三四五六七八九十\d]+[）)]", text):
                     separator = "\n\n"
                 elif previous[-1].isascii() and text[0].isascii():
                     separator = " "
@@ -259,4 +276,4 @@ def assemble_document(pages, title):
         if any(b - a > 1 for a, b in zip(section["pages"], section["pages"][1:])):
             status, reasons = "uncertain", reasons + ["正文跨越未纳入的页面，需核对原页"]
         section["boundary_status"], section["boundary_reasons"] = status, reasons
-    return {"sections": sections, "pages": pages, "removed_lines": removed}
+    return {"sections": sections, "pages": pages, "removed_lines": removed, "document_title": title}

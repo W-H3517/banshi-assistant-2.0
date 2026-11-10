@@ -26,11 +26,24 @@ uv run --locked python -m backend.prepare
 本地 `.env`：
 
 ```dotenv
+MODEL_PROVIDER=deepseek
 DEEPSEEK_API_KEY=填写你的密钥
 DEEPSEEK_MODEL=deepseek-flash
 ```
 
-缺少密钥时，登录和知识库仍可使用，聊天会显示未配置提示。默认模型关闭思考模式。模型配置改变后请新建会话，不自动接续不同模型的历史。
+切换OpenAI时可保留以上密钥，另设置：
+
+```dotenv
+MODEL_PROVIDER=openai
+OPENAI_API_KEY=填写你的OpenAI密钥
+OPENAI_MODEL=gpt-6.1-sol
+OPENAI_API=responses
+OPENAI_REASONING_EFFORT=low
+```
+
+修改`.env`后重启后端并新建会话。两个供应商各用自己的密钥；未指定`MODEL_PROVIDER`仍使用DeepSeek。OpenAI模型须显式填写，推理级别应由该模型支持。支持`responses`和`chat_completions`两种OpenAI协议；本轮Sol工具调用使用Responses，发送`store=false`，不携带DeepSeek专有参数。GPT-6.1 Sol支持的推理级别及工具协议以[官方模型迁移说明](https://developers.openai.com/api/docs/guides/latest-model/gpt-6-astra#migration-quickstart)为准。
+
+缺少所选供应商密钥时，登录和知识库仍可使用，聊天会显示未配置提示。DeepSeek保持关闭思考模式；OpenAI使用指定推理级别，留空时使用模型默认值。模型或OpenAI协议改变后请新建会话，不自动接续不同配置的历史。现有DeepSeek会话及资料不迁移、不删除，切回原配置后可继续。当前四个业务工具共用同一提示和参数Schema，显式使用非严格工具模式，便于比较模型自主调用表现。
 
 ## 开发启动：前后端自动更新（推荐开发时使用）
 
@@ -143,11 +156,13 @@ uv run --locked python -m backend --log-mode detailed
 当前提供四个 Agent 工具：
 
 - `ask_question`：向用户追问，使用 Pydantic AI DeferredToolRequests / DeferredToolResults 暂停与恢复。
-- `search_documents`：具体业务问题的正文混合检索，可用 `document_id` 或 `node_id` 限定范围。最多六个阅读单元，每组展示一个最多 1000 字符的命中片段，附命中子片段 ID、原阅读节点、所属条款、来源和完整性。同段多个子片段不重复占位。不再支持按 `page` 搜索。
+- `search_documents`：`query`接受单个字符串或2～4个不重复子查询，每个最多300字；可限定`document_id`或`node_id`。每个查询最多六组，轮流合并去重后最多24组，每组正文最多1000字符，并标明命中了哪些子查询。返回`items`、`rule_cards`和各查询返回数；返回数不表示依据齐全。规则卡每份命中文件只附一次，摘录适用范围、效力和外部办法指向，保留原文、章节路径与引用，不根据文件名或上传时间推定优先级。普通知识库列表仍调用单查询检索。
 - `locate_document_structure`：定位文件、章节、条号或表名；名称支持子串及空格分隔关键词，不将正文作为结构名称搜索。无 query 时列文件；传 parent_id 且无 query 时列直接子节点。保留所有重名候选，通过路径区分，每页最多 30 个结果，以 next_cursor 续查。
 - `read_document_content`：按节点、阅读单元或片段 ID 读取原解析内容；`scope=node` 读所选节点，`article` 读所属正式条款（无正式条款时读所属编号项），`neighbors` 读正文及同父节点前后各 0～3 个连续段落，不跨结构边界。一次正文最多 6000 字符；`pagination_complete=false` 时保持原参数并传 next_cursor 续读。`boundary_status` 独立说明结构边界是否确认，`reading_complete` 同时要求分页结束和边界确认。边界不明时按 `verification_hint` 使用 `scope=page` 和物理页码 `page` 核验原页块，包括被排除的页脚与脚注。
 
 例如命中跨页长条款中间的片段后，Agent 可按 article_id 或 scope=article 补读整条；条号明确时直接定位结构再阅读。返回正文与来源分开，读取不再根据相似度删掉条款中的条件。完整性仅针对识别出的所选范围，不保证其他条款或附件没有例外；扫描和表格解析警告继续保留。阅读结果也进入聊天的“查阅资料”来源列表。
+
+表格默认补读返回完整字段描述和精简元数据，不重复附带所有坐标；按单个节点设置`include_geometry=true`可读取完整字段、表头单元格及继承来源。正文预算之外还按响应体积分页，必须保持几何参数不变续读。规则卡来源也进入聊天来源列表；引用的文件未匹配时不能用其他文件的金额代替，多个匹配保留歧义。
 
 没有固定的工具调用顺序。单轮连同追问续接最多 8 次模型请求，每次超时 120 秒。停止或失败不把未完成的工具历史写入成功历史，页面允许重新发送；等待问题期间失败仍保留原问题。
 
@@ -158,7 +173,7 @@ uv run --locked python -m backend --log-mode detailed
 ## PDF 与检索实现
 
 - 文字 PDF 使用 pdfplumber 提取条款及表格，扫描页用本地 OCR 恢复自然段；文件标题、原始文件名、已识别章节路径和条目编号作为独立来源字段保存。规则识别出的纯文件标题、章节标题及无正文的条号只作为所属信息，不单独占检索片段；非标准标题仍可能单独保留。
-- 原文正文与所属字段分别保存；关键词检索、向量生成使用正文，聊天将正文与来源分别返回。高亮只定位原文正文，补充的所属信息不伪造 PDF 坐标。正文受 512 token / 1000 字符限制，超长时优先按句界拆分，所有子片段关联同一个原阅读单元。表格行保留字段、单位及表名，不重复拼接制度名或页码。
+- 原文正文与所属字段分别保存；关键词检索、向量生成使用正文或表格字段生成的精简检索文本，聊天将正文与来源分别返回。高亮只定位实际来源，补充的所属信息不伪造PDF坐标。片段受512 token / 1000字符限制，超长时按句界拆分并关联原阅读单元。表格摘要去掉空字段和重复单位，保留普通/旺季、地区、月份和类别；补读返回完整字段描述。表格摘要与完整单元按行ID关联，不把摘要偏移误作原文偏移。
 - Jieba 中文分词＋BM25 关键词排名，与本地 BGE 向量余弦相似度排名用 RRF 按阅读单元融合；每路最多 20 个阅读单元，同段子片段不累计加分。语义候选阈值为 0.40，用于召回筛选，不代表答案置信度；Agent 必须判断片段是否支持结论，无依据时明确说明。模型固定为 Qdrant ONNX 快照 `46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59`；后续更换嵌入模型或分块方案需要重新索引，不能直接混用旧向量。
 - 原 PDF、片段和 float32 向量在同一 SQLite 事务中保存，重启直接读取，未改动资料不重新计算向量。当前采用精确向量扫描和内存 BM25，面向小规模本地试用；大量文档或高并发需要另行评测并升级索引服务。
 - PDF 解析、分词排名及嵌入计算在工作线程中执行；上传排队串行处理，CPU 嵌入限制为 2 个线程。
@@ -224,13 +239,15 @@ git diff --check
 
 ### 结构与索引版本
 
-当前索引版本为 `reading-units-v2`。版本化解析快照独立保存页面块、结构节点、阅读单元和检索片段；阅读单元承载完整正文及来源，检索片段仅承载预算内正文并关联单元 ID。表格行保存表标识、行键、字段值与单元格坐标、多级表头路径及来源页、单位及来源块；续页表头只在相邻页面、列边界一致且无新标题时继承，不填充跨页空白数据。边界确认不代表 OCR/表头解释已经人工审核，也不代表远处例外已全部找到。
+当前索引版本为 `rule-cards-v3`。快照独立保存页面块、结构节点、阅读单元、检索片段和文件规则卡。效力段与尾部落款分开，落款和封面信息原页保留但不检索；标题结合字号和版面识别，问答标签取问题至问号。缩进分段保留所属条款，问答跨页连续。
+
+表格行保存字段、单位、表头路径及单元格来源。相邻续表列位置一致且无新标题时可继承表头；页首空白合并地区区域接续页尾时，仅恢复序号和地区键，记录原始空值、继承来源及说明，不填补价格或旺季空白。边界确认不代表OCR/表头解释已经人工审核，也不保证远处例外已全部找到。默认补读省略重复几何信息，原始网格和完整坐标仍留在快照中。
 
 已获准舍弃索引时，可停止后端后显式执行以下两步。准备过程只使用缓存的本地模型；应用前校验原件及产物哈希，以单个事务替换全部派生索引，写入失败整体回滚。原件或文件集合变化时需重新准备。正常启动不会自动执行此操作。
 
 ```powershell
-uv run --locked python -m backend.reindex --prepare --output data/app/reading-units-review/prepared
-uv run --locked python -m backend.reindex --apply --output data/app/reading-units-review/prepared
+uv run --locked python -m backend.reindex --prepare --output data/app/rules-review/prepared
+uv run --locked python -m backend.reindex --apply --output data/app/rules-review/prepared
 ```
 
 节点 ID 包含本次解析代次，游标绑定该代次及查询/阅读范围；重新上传后旧节点、旧片段和旧游标不能误读新资料。正常重启复用已存快照和向量。启动遇到旧索引明确报错，不自动重建、迁移或删除旧数据；以后再次改变不兼容结构，仍须按 AGENTS.md 确认处理方式。

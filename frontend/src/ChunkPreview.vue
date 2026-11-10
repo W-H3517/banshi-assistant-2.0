@@ -168,7 +168,7 @@ onBeforeUnmount(() => {
           </template>
           <p v-else class="preview-note">将鼠标移到高亮区域查看片段，或从上方选择。</p>
           <p v-for="warning in result.warnings || []" :key="warning" class="location-warning">{{ warning }}</p>
-          <p class="preview-note">纯标题作为所属信息保留，不单独建片段。已排除 {{ result.removed_line_count }} 个页边、脚注或目录块；原页核验仍可读取。</p>
+          <p class="preview-note">纯标题作为所属信息保留，不单独建片段。已排除 {{ result.removed_line_count }} 个页边、脚注、目录或封面落款块；原页核验仍可读取。</p>
         </aside>
       </template>
     </div>

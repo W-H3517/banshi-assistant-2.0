@@ -354,9 +354,9 @@ async def test_search_question_resume_search_remain_reserved(chat):
     async def search(*args):
         searching.set()
         await release.wait()
-        return []
+        return {"items": [], "rule_cards": []}
 
-    chat.db.knowledge = SimpleNamespace(search=search)
+    chat.db.knowledge = SimpleNamespace(search_bundle=search)
 
     def handler(request):
         requests.append(json.loads(request.content))

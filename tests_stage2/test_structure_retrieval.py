@@ -135,6 +135,11 @@ def test_table_rows_keep_fields_and_read_separately(app_client):
     assert "400" not in result["items"][0]["content"]
     assert result["items"][0]["header_pages"] == [1]
     assert result["items"][0]["warnings"]
+    assert "header_cells" not in result["items"][0]["table"]
+    geometry = client.portal.call(kb.read, target["node_id"], "node", 1, None, None, True)
+    assert geometry["items"][0]["table"]["header_cells"]
+    assert geometry["items"][0]["table"]["fields"][0]["bbox"]
+    assert len(json.dumps(result)) < len(json.dumps(geometry))
 
 
 def test_agent_locate_read_search_and_sources(tmp_path):
@@ -154,7 +159,8 @@ def test_agent_locate_read_search_and_sources(tmp_path):
         if len(requests) == 3:
             assert previous["pagination_complete"] and any("450" in i["content"] for i in previous["items"])
             return tool("search_documents", {"query": "酒店预算上限"}, "search1")
-        assert any("450" in i["content"] for i in previous)
+        assert any("450" in i["content"] for i in previous["items"])
+        assert "rule_cards" in previous
         return sse({"role": "assistant", "content": "模拟标准为450元。"})
 
     def factory(settings, user_id, db):
@@ -173,5 +179,79 @@ def test_agent_locate_read_search_and_sources(tmp_path):
         assert message["sources"] and all(t["status"] == "done" for t in message["tools"])
         assert [t["name"] for t in message["tools"]] == [
             "locate_document_structure", "read_document_content", "search_documents"]
+        for transport in clients:
+            client.portal.call(transport.aclose)
+
+
+def test_search_rule_card_page_is_added_to_chat_sources(tmp_path):
+    requests, clients = [], []
+
+    def handler(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        if len(requests) == 1:
+            return tool("search_documents", {"query": ["公务平台预订机票", "商业代理预订机票"]}, "search-rules")
+        result = json.loads(body["messages"][-1]["content"])
+        assert result["items"]
+        assert any("以本通知为准" in r["content"] for c in result["rule_cards"] for r in c["rules"])
+        return sse({"role": "assistant", "content": "已检查规则卡。"})
+
+    def factory(settings, user_id, db):
+        transport = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+        clients.append(transport)
+        model = OpenAIChatModel(settings.model, provider=DeepSeekProvider(api_key="test", http_client=transport))
+        return create_agent(settings, user_id, db, model=model)
+
+    with TestClient(create_app(Settings(data_dir=tmp_path, api_key="test"), agent_factory=factory)) as client:
+        login(client)
+        doc = upload(client, make_pdf([
+            "票务通知\n第一条 公务机票通过公务平台预订，不得通过商业代理预订。",
+            "本通知自发布之日起施行。此前规定与本通知不一致的，以本通知为准。",
+        ]), "票务通知.pdf")
+        conversation = client.post('/api/conversations').json()
+        path = f"/api/conversations/{conversation['id']}"
+        result = client.post(path + '/turn', json={'prompt': '机票在哪预订？'})
+        assert '"type": "done"' in result.text
+        sources = client.get(path).json()['transcript'][-1]['sources']
+        assert any(s['id'] == doc and s['page'] == 2 for s in sources)
+        assert len({(s['id'], s['page']) for s in sources}) == len(sources)
+        for transport in clients:
+            client.portal.call(transport.aclose)
+
+
+@pytest.mark.parametrize("arguments", ['{"query": ["差旅补助"]}', '{"query": 差旅补助}'])
+def test_invalid_search_arguments_retry_without_becoming_sources(tmp_path, arguments):
+    requests, clients = [], []
+
+    def handler(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        if len(requests) == 1:
+            query = body["tools"][0]["function"]["parameters"]["properties"]["query"]
+            assert query["description"] and query["anyOf"][1]["minItems"] == 2
+            return sse({"role": "assistant", "tool_calls": [{"index": 0, "id": "invalid-search",
+                        "type": "function", "function": {"name": "search_documents",
+                                                           "arguments": arguments}}]}, "tool_calls")
+        if len(requests) == 2:
+            feedback = body["messages"][-1]["content"].lower()
+            assert "validation" in feedback or "json_invalid" in feedback
+            return tool("search_documents", {"query": "差旅补助"}, "corrected-search")
+        assert "items" in json.loads(body["messages"][-1]["content"])
+        return sse({"role": "assistant", "content": "参数纠正后检索完成。"})
+
+    def factory(settings, user_id, db):
+        transport = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+        clients.append(transport)
+        model = OpenAIChatModel(settings.model, provider=DeepSeekProvider(api_key="test", http_client=transport))
+        return create_agent(settings, user_id, db, model=model)
+
+    with TestClient(create_app(Settings(data_dir=tmp_path, api_key="test"), agent_factory=factory)) as client:
+        login(client)
+        conversation = client.post("/api/conversations").json()
+        path = f"/api/conversations/{conversation['id']}"
+        result = client.post(path + "/turn", json={"prompt": "差旅补助"})
+        assert '"type": "done"' in result.text, result.text
+        assert len(requests) == 3
+        assert client.get(path).json()["status"] == "idle"
         for transport in clients:
             client.portal.call(transport.aclose)

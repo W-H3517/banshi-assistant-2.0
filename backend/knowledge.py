@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import logging
 import re
 
@@ -33,6 +34,7 @@ jieba.setLogLevel(logging.WARNING)
 STOP_WORDS = {"的", "了", "和", "是", "在", "要", "有", "我", "你", "请", "什么", "哪些", "怎么",
               "如何", "是否", "可以", "需要", "多少", "一个", "这个", "进行", "关于"}
 MAX_RESULTS = 6
+READ_RESPONSE_BUDGET = 24000
 # 这是候选召回阈值，不是“有制度依据”的判定；由 Agent 核对片段是否支持结论。
 MIN_SIMILARITY = 0.40
 
@@ -244,7 +246,7 @@ class KnowledgeBase:
                 "next_cursor": encode_cursor(scope, end) if end < len(results) else None,
                 "total": len(results)}
 
-    async def read(self, target_id, scope="node", neighbors=1, cursor=None, page=None):
+    async def read(self, target_id, scope="node", neighbors=1, cursor=None, page=None, include_geometry=False):
         if scope not in ("node", "article", "neighbors", "page") or not 0 <= neighbors <= 3:
             raise ValueError("阅读范围须为 node/article/neighbors/page，相邻段数为 0 到 3")
         snapshots = await self.snapshots()
@@ -271,7 +273,7 @@ class KnowledgeBase:
             if page is not None:
                 raise ValueError("page参数仅用于原页核验scope=page")
             target, nodes = read_nodes(structure, target, scope, neighbors)
-        cursor_scope = ["read", structure["generation"], target_id, scope, neighbors, page]
+        cursor_scope = ["read", structure["generation"], target_id, scope, neighbors, page, include_geometry]
         offset = decode_cursor(cursor, cursor_scope)
         total = sum(len(n["content"]) for n in nodes)
         if offset > total:
@@ -287,14 +289,27 @@ class KnowledgeBase:
             pages = sorted({s["page"] for s in node["spans"]
                             if s["start"] < end and s["end"] > start}) or node["source_pages"]
             info = node_info(structure, node, document_id, title)
-            items.append({**info, "content": text[start:end], "start": start, "end": end,
+            table = node.get("table")
+            if table and not include_geometry:
+                table = {k: table[k] for k in ("id", "row", "row_key", "unit", "header_pages", "header_status")}
+                table["geometry_hint"] = {"target_id": node["id"], "include_geometry": True}
+                table["inherited_fields"] = [{"name": f["name"], "value": f["value"],
+                                               "from_page": f["inherited_from"]["page"]}
+                                              for f in node["table"]["fields"] if f.get("inherited_from")]
+            item = {**info, "content": text[start:end], "start": start, "end": end,
                           "pages": pages, "page": pages[0],
                           "citation": f"/api/documents/{document_id}#page={pages[0]}",
                           "excerpt_complete": start == 0 and end == len(text),
                           "unit_id": node["unit_id"], "boundary_status": node["boundary_status"],
-                          "boundary_reasons": node["boundary_reasons"], "table": node.get("table"),
+                          "boundary_reasons": node["boundary_reasons"], "table": table,
                           "header_pages": node.get("header_pages", []),
-                          "warnings": snapshot["preview"]["warnings"] + node["warnings"]})
+                          "warnings": snapshot["preview"]["warnings"] + node["warnings"]}
+            # 给外层页码、游标和边界说明留预算；几何信息默认不进入模型上下文。
+            if len(json.dumps(items + [item], ensure_ascii=False)) > READ_RESPONSE_BUDGET - 5000:
+                if items:
+                    break
+                raise ValueError("单项来源信息超过返回预算，请不带几何信息读取并核对原PDF")
+            items.append(item)
             remaining -= end - start
             if remaining == 0:
                 break
@@ -303,15 +318,19 @@ class KnowledgeBase:
         reasons = list(dict.fromkeys(r for n in nodes for r in n["boundary_reasons"]))
         if not nodes:
             reasons.append("该结构节点没有可读取正文，需核对原页")
-        source_pages = sorted({p for n in nodes for p in n["source_pages"] + n.get("header_pages", [])}) or target["pages"]
+        source_pages = sorted({p for n in items for p in n["pages"] + n.get("header_pages", [])}) or target["pages"][:1]
+        source_pages = sorted(set(source_pages) | {f["inherited_from"]["page"] for n in nodes if n.get("table")
+                                                  and any(i["node_id"] == n["id"] for i in items)
+                                                  for f in n["table"]["fields"] if f.get("inherited_from")})
         return {"target": node_info(structure, target, document_id, title), "items": items,
                 "pagination_complete": end_offset >= total, "boundary_status": boundary,
                 "reading_complete": end_offset >= total and boundary == "confirmed",
                 "missing_or_uncertain_parts": reasons,
                 "verification_pages": [{"page": p, "citation": f"/api/documents/{document_id}#page={p}"}
-                                       for p in source_pages],
+                                       for p in source_pages[:12]],
+                "verification_pages_complete": len(source_pages) <= 12,
                 "verification_hint": {"target_id": structure["nodes"][0]["id"], "scope": "page",
-                                      "pages": sorted({p for origin in source_pages for p in (origin, origin + 1)
+                                      "pages": sorted({p for origin in source_pages[:12] for p in (origin, origin + 1)
                                                        if p <= len(snapshot["parsed"]["pages"])})},
                 "next_cursor": encode_cursor(cursor_scope, end_offset) if end_offset < total else None,
                 "note": "分页结束仅表示本次范围读完；边界confirmed基于显式结构，不保证OCR/表格语义无误或覆盖远处例外。"}
@@ -362,13 +381,57 @@ class KnowledgeBase:
                             "pages": part["pages"], "content": chunk.content,
                             "source": part["source"], "kind": node["kind"],
                             "unit_id": node["unit_id"],
-                            "excerpt_complete": part["start"] == 0 and part["end"] == len(reading_content(structure, node)["content"]),
+                            "excerpt_complete": node["kind"] != "table_row" and part["start"] == 0 and part["end"] == len(reading_content(structure, node)["content"]),
                             "boundary_status": node["boundary_status"],
                             "boundary_reasons": node["boundary_reasons"],
                             "citation": f"/api/documents/{chunk.document_id}#page={part['pages'][0]}",
                             "warnings": preview["warnings"] + part["warnings"]}
         logger.info("正文检索 candidates=%d groups=%d", len(rows), len(grouped))
         return list(grouped.values())
+
+    async def search_bundle(self, query, document_id=None, node_id=None):
+        queries = [query] if isinstance(query, str) else query
+        if not isinstance(queries, list) or not 1 <= len(queries) <= 4 or (
+                isinstance(query, list) and len(query) < 2):
+            raise ValueError("搜索须为单个字符串或2至4个子查询")
+        if any(not isinstance(q, str) or not q.strip() or len(q) > 300 for q in queries):
+            raise ValueError("每个查询须为1至300字")
+        queries = [q.strip() for q in queries]
+        if len(set(queries)) != len(queries):
+            raise ValueError("子查询不能重复")
+        groups = [await self.search(q, document_id, node_id) for q in queries]
+        selected = {}
+        limit = MAX_RESULTS * len(queries)
+        # 轮流取每个子查询候选，避免一个子问题挤掉其他子问题。
+        for rank in range(MAX_RESULTS):
+            for hits in groups:
+                if rank < len(hits) and len(selected) < limit:
+                    hit = hits[rank]
+                    selected.setdefault(hit["node_id"], dict(hit))
+        for key, item in selected.items():
+            item["matched_queries"] = [i for i, hits in enumerate(groups) if any(h["node_id"] == key for h in hits)]
+        snapshots = await self.snapshots()
+        cards = []
+        for key in dict.fromkeys(h["id"] for h in selected.values()):
+            snapshot, title = snapshots[key]
+            rules = []
+            for rule in snapshot["rule_card"]["rules"]:
+                refs = []
+                for name in rule["references"]:
+                    matched = [docid for docid, (s, t) in snapshots.items()
+                               if normalize_label(name) in (normalize_label(t),
+                                   normalize_label(re.sub(r"[（(]修订[）)]$", "", t)),
+                                   normalize_label(s["structure"]["filename"].removesuffix(".pdf")))]
+                    refs.append({"title": name, "document_ids": matched,
+                                 "status": "matched" if len(matched) == 1 else "ambiguous" if matched else "not_matched",
+                                 "note": "按名称匹配，允许省略修订后缀，不推断版本效力；未匹配时不能借用其他文件金额"})
+                rules.append({**rule, "id": key, "title": title, "page": rule["pages"][0],
+                              "citation": f"/api/documents/{key}#page={rule['pages'][0]}", "references": refs})
+            cards.append({"id": key, "title": title, "rules": rules, "note": snapshot["rule_card"]["note"]})
+        return {"items": list(selected.values()), "rule_cards": cards, "queries": queries,
+                "query_results": [{"query": q, "returned": sum(i in h["matched_queries"] for h in selected.values())}
+                                  for i, q in enumerate(queries)],
+                "note": "命中数不表示依据齐全；规则卡为原文摘录，不保证自动识别所有效力关系。金额仍需核对适用范围与计算规则。"}
 
     def rank(self, query, rows, snapshots):
         corpus = [terms(chunk.content) for chunk, _ in rows]
