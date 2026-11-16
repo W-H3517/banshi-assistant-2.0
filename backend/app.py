@@ -56,6 +56,7 @@ def create_app(settings=None, *, agent_factory=create_agent):
             db.knowledge = await KnowledgeBase.create(db, settings)
             await db.knowledge.check_index()
             await db.knowledge.seed()
+            await db.knowledge.backfill_experiences()
             app.state.chat = ChatService(db, settings, agent_factory, logs.instrumentation)
             try:
                 yield

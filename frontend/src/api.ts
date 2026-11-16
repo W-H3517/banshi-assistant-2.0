@@ -1,5 +1,5 @@
 export interface User { id: string; username: string; name: string; role: string }
-export interface Source { id: string; title: string; page?: number }
+export interface Source { kind?: 'document' | 'experience'; id: string; title: string; page?: number }
 export interface Tool { id: string; name: string; status: string }
 export interface Message { role: string; text: string; tools?: Tool[]; sources?: Source[] }
 export interface Question { id: string; question: string; options?: string[] | null }

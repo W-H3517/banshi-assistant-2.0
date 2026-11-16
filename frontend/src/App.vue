@@ -8,6 +8,7 @@ import ExperienceForm from './ExperienceForm.vue'
 import ExperienceMine from './ExperienceMine.vue'
 import ExperienceLibrary from './ExperienceLibrary.vue'
 import ExperienceAdmin from './ExperienceAdmin.vue'
+import { type PublishedExperience } from './experience'
 const ChunkPreview = defineAsyncComponent(() => import('./ChunkPreview.vue'))
 
 const user = ref<User | null>(null)
@@ -24,6 +25,8 @@ const pageTitle: Record<Page, [string, string]> = {
 }
 const libraryTab = ref<'documents' | 'experiences'>('documents')
 const experienceTags = ref<string[]>([])
+const availableExperienceIds = ref<string[]>([])
+const openedExperience = ref<PublishedExperience | null>(null)
 const conversations = ref<Conversation[]>([])
 const current = ref<Conversation | null>(null)
 const documents = ref<Document[]>([])
@@ -59,9 +62,11 @@ async function loadDocuments() {
   documents.value = search.value.trim() ? await api<Document[]>('/documents?q=' + encodeURIComponent(search.value)) : all
 }
 async function loadExperienceTags() {
-  experienceTags.value = (await api<{ tags: string[] }>('/experiences')).tags
+  const result = await api<{ tags: string[]; items: PublishedExperience[] }>('/experiences')
+  experienceTags.value = result.tags
+  availableExperienceIds.value = result.items.map(item => item.id)
 }
-function go(target: Page) { page.value = target; mobileOpen.value = false }
+function go(target: Page) { page.value = target; mobileOpen.value = false; if (target === 'chat') void guard(loadExperienceTags) }
 async function initialize() {
   await Promise.all([listConversations(), loadDocuments(), loadExperienceTags()])
   const health = await api<{ model_configured: boolean }>('/health')
@@ -80,6 +85,7 @@ function clearSession() {
   page.value = 'chat'; libraryTab.value = 'documents'; experienceTags.value = []
   inspectionDocument.value = null
   availableDocumentIds.value = []
+  availableExperienceIds.value = []; openedExperience.value = null
   selectedDocument.value = null; documentOpen.value = false; draft.value = ''; answerValues.value = {}
 }
 async function logout() {
@@ -89,7 +95,7 @@ async function logout() {
 async function openConversation(id: string) {
   if (sending.value) return
   current.value = await api<Conversation>(`/conversations/${id}`)
-  await loadDocuments()
+  await Promise.all([loadDocuments(), loadExperienceTags()])
   answerValues.value = {}; draft.value = ''; page.value = 'chat'; mobileOpen.value = false
   await scrollDown()
 }
@@ -98,6 +104,13 @@ function newChat() {
   current.value = null; draft.value = ''; answerValues.value = {}; page.value = 'chat'; mobileOpen.value = false
 }
 async function scrollDown() { await nextTick(); scrollArea.value?.scrollTo({ top: scrollArea.value.scrollHeight }) }
+async function openExperience(id: string) {
+  await guard(async () => {
+    await loadExperienceTags()
+    if (!availableExperienceIds.value.includes(id)) { ElMessage.warning('经验已下架'); return }
+    openedExperience.value = await api<PublishedExperience>(`/experiences/${id}/published`)
+  })
+}
 async function openDocument(id: string, page = 1) {
   await guard(async () => {
     selectedDocument.value = await api<Document>(`/documents/${id}`)
@@ -184,6 +197,7 @@ async function send(text?: string) {
     if (user.value) {
       if (id) await guard(async () => { current.value = await api<Conversation>(`/conversations/${id}`) })
       await guard(listConversations)
+      await guard(loadExperienceTags)
     }
     if (failed && !answering) draft.value = previousDraft || prompt
     if (!failed) answerValues.value = {}
@@ -247,8 +261,8 @@ onUnmounted(() => window.removeEventListener('session-expired', clearSession))
             <article v-for="(message, index) in messages" :key="index" class="message" :class="message.role">
               <div v-if="message.role === 'assistant'" class="assistant-avatar">办</div><div class="message-body"><span class="message-author">{{ message.role === 'user' ? '你' : '办事助手' }}</span>
                 <div v-if="message.tools?.length" class="tool-row"><span v-for="tool in message.tools" :key="tool.id" class="tool-chip"><i :class="tool.status"></i>{{ tool.name === 'ask_question' ? '问问题' : tool.name === 'locate_document_structure' ? '定位制度' : tool.name === 'read_document_content' ? '读取内容' : '搜索正文' }} · {{ tool.status === 'running' ? '进行中' : tool.status === 'waiting' ? '待回答' : '已完成' }}</span></div>
-                <Markdown v-if="message.role === 'assistant' && message.text" :text="message.text" :available-document-ids="availableDocumentIds" @document="openDocument" /><p v-else-if="message.role === 'user'" class="user-text">{{ message.text }}</p><div v-else-if="busy && index === messages.length - 1" class="thinking">正在思考<span>…</span></div>
-                <div v-if="message.sources?.length" class="source-row"><span>查阅资料</span><button v-for="source in message.sources" :key="`${source.id}-${source.page}`" :disabled="!availableDocumentIds.includes(source.id)" @click="openDocument(source.id, source.page)"><el-icon><DocumentIcon /></el-icon>{{ source.title }} · 第 {{ source.page }} 页<span v-if="!availableDocumentIds.includes(source.id)">（资料已删除）</span></button></div>
+                <Markdown v-if="message.role === 'assistant' && message.text" :text="message.text" :available-document-ids="availableDocumentIds" :available-experience-ids="availableExperienceIds" @document="openDocument" @experience="openExperience" /><p v-else-if="message.role === 'user'" class="user-text">{{ message.text }}</p><div v-else-if="busy && index === messages.length - 1" class="thinking">正在思考<span>…</span></div>
+                <div v-if="message.sources?.length" class="source-row"><span>查阅资料</span><button v-for="source in message.sources" :key="`${source.id}-${source.page}`" :disabled="!(source.kind === 'experience' ? availableExperienceIds : availableDocumentIds).includes(source.id)" @click="source.kind === 'experience' ? openExperience(source.id) : openDocument(source.id, source.page)"><el-icon><DocumentIcon /></el-icon>{{ source.kind === 'experience' ? '经验 · ' : '制度 · ' }}{{ source.title }}<template v-if="source.kind !== 'experience'"> · 第 {{ source.page }} 页</template><span v-if="!(source.kind === 'experience' ? availableExperienceIds : availableDocumentIds).includes(source.id)">{{ source.kind === 'experience' ? '（已下架）' : '（资料已删除）' }}</span></button></div>
               </div>
             </article>
             <div v-if="current?.pending.length && !sending" class="question-card"><div class="question-heading">补充一点信息，继续办理</div><div v-for="question in current.pending" :key="question.id" class="question-item"><label :for="question.id">{{ question.question }}</label><div class="question-options"><button v-for="option in question.options || []" :key="option" :class="{ chosen: answerValues[question.id] === option }" @click="answerValues[question.id] = option">{{ option }}</button></div><el-input :id="question.id" v-model="answerValues[question.id]" placeholder="也可以直接输入你的回答" :maxlength="12000" /></div><el-button type="primary" :disabled="!readyAnswers || !modelReady" @click="send()">提交回答并继续 <el-icon><ArrowRight /></el-icon></el-button></div>
@@ -273,4 +287,12 @@ onUnmounted(() => window.removeEventListener('session-expired', clearSession))
     <ChunkPreview v-if="inspectionDocument && user.role === 'admin'" :document="inspectionDocument" @close="inspectionDocument = null" />
     <el-drawer v-model="documentOpen" :title="selectedDocument?.title || '制度原文'" size="min(980px, 100vw)" destroy-on-close><div v-if="selectedDocument" class="document-reader"><div class="reader-meta"><span>{{ selectedDocument.filename }}</span><el-tag size="small" effect="plain">制度原文</el-tag></div><div class="pdf-controls"><span>定位到第</span><el-input-number v-model="documentPage" :min="1" :max="selectedDocument.page_count" :precision="0" size="small" aria-label="PDF 页码" /><span>页 / 共 {{ selectedDocument.page_count }} 页</span><a :href="pdfUrl" target="_blank" rel="noopener noreferrer">新窗口打开原文 ↗</a></div><iframe :key="pdfUrl" :src="pdfUrl" class="pdf-frame" title="制度 PDF 原文"></iframe><p class="knowledge-note">引用使用 PDF 物理页码。若内嵌预览不可用，请在新窗口打开原文。</p></div></el-drawer>
   </div>
+  <el-dialog :model-value="openedExperience !== null" title="经验详情" width="min(720px, 94vw)" @close="openedExperience = null">
+    <template v-if="openedExperience">
+      <p>{{ openedExperience.tags.join(' · ') }}</p>
+      <el-alert v-if="openedExperience.conflict" type="warning" :closable="false" title="这条经验与制度的规定不同" :description="openedExperience.conflict_note" />
+      <p style="white-space: pre-wrap; line-height: 1.9">{{ openedExperience.content }}</p>
+      <p>某同事 分享 · 经管理员审核</p>
+    </template>
+  </el-dialog>
 </template>

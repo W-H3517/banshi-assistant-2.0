@@ -175,6 +175,16 @@ async def detail(experience_id: str, user: UserDep, request: Request):
     raise HTTPException(404, "经验不存在或尚未发布")
 
 
+@router.get("/experiences/{experience_id}/published")
+async def published_detail(experience_id: str, user: UserDep, request: Request):
+    """聊天引用只读发布稿，即使访问者是提交人也不回退到原文。"""
+    async with request.app.state.db.sessions() as session:
+        item = await session.get(Experience, experience_id)
+    if item is not None and item.status == "published":
+        return public_view(item)
+    raise HTTPException(404, "经验未发布或已下架")
+
+
 @router.get("/admin/experiences")
 async def review_list(user: UserDep, request: Request):
     """管理工作台：全部已提交的经验及其操作记录；草稿不在其中。"""
@@ -210,6 +220,7 @@ async def review(experience_id: str, body: Review, user: UserDep, request: Reque
         if target == "published":
             item.published_at = now()
         item.updated_at = now()
+        await request.app.state.db.knowledge.index_experience(session, item)
         session.add(ExperienceEvent(experience_id=item.id, actor_id=user.id, action=body.action,
                                     note=body.note, content=item.content))
         author = await session.scalar(select(User.name).where(User.id == item.author_id))

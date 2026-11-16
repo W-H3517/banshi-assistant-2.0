@@ -207,6 +207,7 @@ class Search:
             "documents": documents | {other["id"]: other["title"]
                                       for hit in hits for other in hit["also_in"]},
             "items": [compact(hit, len(queries) > 1) for hit in hits],
+            "experiences": await self.search_experiences(queries),
             "rule_cards": await self.rule_cards(fresh),
             "queries": queries,
             "query_results": [{"query": q, "returned": sum(i in h["matched_queries"] for h in hits)}

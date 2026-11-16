@@ -19,6 +19,8 @@ locate_document_structure（定位文件和结构）、read_document_content（�
 搜索的queries始终是数组，放1至4个查询；多事项拆成多个查询，例如限额与报销方式、伙食与交通分别查询。
 每个查询最多六组命中，多个查询轮流合并去重；不要把参考答案或臆测金额写入查询。
 搜索items不是整条依据；文件名、章节、条号不拼入正文检索。items的id对应documents中的文件标题。
+搜索同时返回experiences（已发布员工经验），限定制度范围也会查经验。partial表示片段，可用read_document_content的target_id传经验id读取全文。
+经验署名为某同事，引用用[某同事的经验](citation)。经验与制度冲突时采用经验，同时列出制度原文和经验内容、各带引用，明确提醒“这里按经验处理，与制度某条不同”。
 items带also_in时表示其他文件收录了相同内容，引用时任选其一并可说明另见；带partial时只是段落的一部分。
 每份文件的rule_cards在一次对话中只附带一次，rule_cards_sent_before列出前文已提供的文件；回答前检查其适用范围、效力和外部文件指向。
 引用的外部办法未匹配时不能套用国内或其他文件金额；规则卡也不能替代对冲突条件的判断。
@@ -71,6 +73,7 @@ def create_agent(settings: Settings, user_id: str, db: Database, *, model=None):
     ) -> dict:
         """按1至4个查询混合检索正文；可限定文档或结构节点。
 
+        同时返回experiences（经验片段），即使限定制度范围也检索经验。
         返回documents（文件id到标题）、items（命中片段）、rule_cards（命中文件的规则原文，
         每份文件一次对话只附带一次）。同段多个子片段合为一组，内容相同的片段只列一条。
         查文件名/章节/条号应使用定位工具。
@@ -113,7 +116,7 @@ def create_agent(settings: Settings, user_id: str, db: Database, *, model=None):
         neighbors: Annotated[int, Field(ge=0, le=3)] = 1, cursor: str | None = None,
         page: Annotated[int, Field(ge=1)] | None = None, include_geometry: bool = False,
     ) -> dict:
-        """按节点或片段 ID 确定性补读，不按相关性截取。
+        """按节点或片段 ID 确定性补读；target_id为经验id时返回完整发布稿。
 
         node 读取完整所选节点；article 读取所属完整条款；neighbors 读取正文及
         同父节点的前后段（每侧 0～3 段，不跨结构边界）。超长 pagination_complete=false，
@@ -123,7 +126,7 @@ def create_agent(settings: Settings, user_id: str, db: Database, *, model=None):
         默认省略表格几何明细；必要时按单个节点设置include_geometry=true读取完整字段及坐标。
 
         Args:
-            target_id: 先前返回的node_id、article_id、unit_id或chunk_id；不能传文件id或自造ID。
+            target_id: 先前返回的node_id、article_id、unit_id、chunk_id或经验id；不能传文件id或自造ID。
             scope: node读所选节点及其正文子树；article读所属条款；neighbors读同父相邻正文；page核验原页。
             neighbors: 仅neighbors范围使用，每侧0至3段，默认1段。
             cursor: 上次next_cursor；续读时包括include_geometry在内的其他参数保持不变。
@@ -131,6 +134,9 @@ def create_agent(settings: Settings, user_id: str, db: Database, *, model=None):
             include_geometry: 默认false，正文仍完整；需要核对来源坐标时按单个节点设true。
         """
         try:
+            experience = await db.knowledge.read_experience(target_id)
+            if experience is not None:
+                return experience
             return await db.knowledge.read(target_id, scope, neighbors, cursor, page, include_geometry)
         except ValueError as exc:
             raise ModelRetry(str(exc)) from None

@@ -189,6 +189,12 @@ class ChatService:
                         content = event.part.content
                         titles = {}
                         if isinstance(content, dict):
+                            for item in content.get("experiences", []):
+                                source = {"id": item["id"], "kind": "experience",
+                                          "title": "某同事的经验 · " + "、".join(item["tags"])}
+                                if source not in assistant["sources"]:
+                                    assistant["sources"].append(source)
+                                    queue.put_nowait({"type": "source", **source})
                             # 搜索条目的标题在 documents 中只列一次；阅读条目和规则自带标题。
                             titles = content.get("documents", {})
                             content = content.get("items", []) + [rule for card in content.get("rule_cards", [])
@@ -196,7 +202,7 @@ class ChatService:
                         if isinstance(content, list):
                             for doc in content:
                                 for page in doc.get("pages", [doc.get("page")]):
-                                    source = {"id": doc["id"], "page": page,
+                                    source = {"id": doc["id"], "page": page, "kind": "document",
                                               "title": doc.get("title") or titles[doc["id"]]}
                                     if source not in assistant["sources"]:
                                         assistant["sources"].append(source)

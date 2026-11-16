@@ -5,6 +5,7 @@ import logging
 
 from ..embeddings import LocalEmbeddings
 from ..parsing.ocr import LocalOCR
+from .experiences import Experiences
 from .library import DuplicateDocument, Library, public_document
 from .reading import Reading
 from .search import MAX_RESULTS, Search, terms
@@ -13,7 +14,7 @@ __all__ = ["MAX_RESULTS", "DuplicateDocument", "KnowledgeBase", "public_document
 logger = logging.getLogger(__name__)
 
 
-class KnowledgeBase(Library, Search, Reading):
+class KnowledgeBase(Library, Search, Reading, Experiences):
     def __init__(self, db, embeddings, ocr=None):
         self.db = db
         self.embeddings = embeddings

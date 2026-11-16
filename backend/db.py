@@ -119,6 +119,17 @@ class Experience(Base):
     published_at: Mapped[str | None]
 
 
+class ExperienceChunk(Base):
+    """已发布经验的派生片段；发布内容与片段在同一事务内更新。"""
+
+    __tablename__ = "experience_chunks"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    experience_id: Mapped[str] = mapped_column(ForeignKey("experiences.id"), index=True)
+    ordinal: Mapped[int]
+    content: Mapped[str] = mapped_column(Text)
+    vector: Mapped[bytes] = mapped_column(LargeBinary)
+
+
 class ExperienceEvent(Base):
     """经验的操作记录：提交、核实、调整、发布、不发布、下架各一条，保留当时的内容用于追溯。"""
 

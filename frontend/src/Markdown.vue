@@ -1,12 +1,20 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import MarkdownIt from 'markdown-it'
-const props = defineProps<{ text: string, availableDocumentIds: string[] }>()
-const emit = defineEmits<{ document: [id: string, page: number] }>()
+const props = defineProps<{ text: string, availableDocumentIds: string[], availableExperienceIds: string[] }>()
+const emit = defineEmits<{ document: [id: string, page: number], experience: [id: string] }>()
 const md = new MarkdownIt({ html: false, linkify: false, breaks: true })
 const html = computed(() => {
   const document = new DOMParser().parseFromString(md.render(props.text), 'text/html')
   for (const anchor of document.querySelectorAll('a')) {
+    const experience = anchor.getAttribute('href')?.match(/^\/api\/experiences\/([a-f0-9-]+)\/published$/i)
+    if (experience && !props.availableExperienceIds.includes(experience[1]!)) {
+      const label = document.createElement('span')
+      label.className = 'deleted-source'
+      label.textContent = `${anchor.textContent}（已下架）`
+      anchor.replaceWith(label)
+      continue
+    }
     const source = anchor.getAttribute('href')?.match(/^(?:citation:)?(\/api\/documents\/([a-f0-9-]+)(?:#page=\d+)?)$/i)
     if (!source) continue
     // 兼容历史回答中模型添加的 citation: 前缀，统一使用站内原文链接。
@@ -24,6 +32,8 @@ function click(event: MouseEvent) {
   const anchor = (event.target as HTMLElement).closest('a')
   if (!anchor) return
   const href = anchor.getAttribute('href') || ''
+  const experience = href.match(/^\/api\/experiences\/([a-f0-9-]+)\/published$/i)
+  if (experience) { event.preventDefault(); emit('experience', experience[1]!); return }
   const source = href.match(/^\/api\/documents\/([a-f0-9-]+)(?:#page=(\d+))?$/i)
   if (source) {
     event.preventDefault()
