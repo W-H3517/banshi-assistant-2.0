@@ -41,7 +41,17 @@ OPENAI_API=responses
 OPENAI_REASONING_EFFORT=low
 ```
 
-修改`.env`后重启后端并新建会话。两个供应商各用自己的密钥；未指定`MODEL_PROVIDER`仍使用DeepSeek。OpenAI模型须显式填写，推理级别应由该模型支持。支持`responses`和`chat_completions`两种OpenAI协议；本轮Sol工具调用使用Responses，发送`store=false`，不携带DeepSeek专有参数。GPT-6.1 Sol支持的推理级别及工具协议以[官方模型迁移说明](https://developers.openai.com/api/docs/guides/latest-model/gpt-6-astra#migration-quickstart)为准。
+使用本机Ollama模型时不需要密钥，先确认Ollama已启动且模型已下载（`ollama list`），再设置：
+
+```dotenv
+MODEL_PROVIDER=ollama
+OLLAMA_MODEL=qwen3.5:4b
+OLLAMA_BASE_URL=http://localhost:11434/v1
+```
+
+本地模型走Ollama的OpenAI兼容接口，发送`reasoning_effort=none`关闭思考，不携带DeepSeek或OpenAI专有参数。上下文长度由Ollama侧的`OLLAMA_CONTEXT_LENGTH`决定，超出时Ollama会丢弃较早内容且不报错。Ollama未启动时登录和知识库仍可使用，聊天会报模型调用失败。
+
+修改`.env`后重启后端并新建会话。云端两个供应商各用自己的密钥；未指定`MODEL_PROVIDER`仍使用DeepSeek。OpenAI模型须显式填写，推理级别应由该模型支持。支持`responses`和`chat_completions`两种OpenAI协议；本轮Sol工具调用使用Responses，发送`store=false`，不携带DeepSeek专有参数。GPT-6.1 Sol支持的推理级别及工具协议以[官方模型迁移说明](https://developers.openai.com/api/docs/guides/latest-model/gpt-6-astra#migration-quickstart)为准。
 
 缺少所选供应商密钥时，登录和知识库仍可使用，聊天会显示未配置提示。DeepSeek保持关闭思考模式；OpenAI使用指定推理级别，留空时使用模型默认值。模型或OpenAI协议改变后请新建会话，不自动接续不同配置的历史。现有DeepSeek会话及资料不迁移、不删除，切回原配置后可继续。当前四个业务工具共用同一提示和参数Schema，显式使用非严格工具模式，便于比较模型自主调用表现。
 

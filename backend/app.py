@@ -81,7 +81,7 @@ def create_app(settings=None, *, agent_factory=create_agent):
 
     @app.get("/api/health")
     async def health():
-        return {"ok": True, "model_configured": bool(settings.api_key)}
+        return {"ok": True, "model_configured": settings.model_ready}
 
     @app.post("/api/login")
     async def login(body: Credentials, response: Response):

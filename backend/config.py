@@ -15,15 +15,23 @@ class Settings:
     model: str = "deepseek-flash"
     log_mode: Literal["simple", "detailed"] = "simple"
     model_cache_dir: Path = ROOT / "data/models"
-    provider: Literal["deepseek", "openai"] = "deepseek"
+    provider: Literal["deepseek", "openai", "ollama"] = "deepseek"
     openai_api: Literal["responses", "chat_completions"] = "responses"
     reasoning_effort: str | None = None
+    ollama_base_url: str = "http://localhost:11434/v1"
 
     @property
     def conversation_model(self):
         if self.provider == "deepseek":
             return self.model
+        if self.provider == "ollama":
+            return f"ollama:{self.model}"
         return f"openai:{self.openai_api}:{self.model}"
+
+    @property
+    def model_ready(self):
+        """本机 Ollama 不需要密钥；云端供应商须已配置密钥。"""
+        return self.provider == "ollama" or bool(self.api_key)
 
     @classmethod
     def load(cls):
@@ -35,8 +43,11 @@ class Settings:
             return os.getenv(name, values.get(name) or default).strip()
 
         provider = value("MODEL_PROVIDER", "deepseek")
-        if provider not in ("deepseek", "openai"):
-            raise ValueError("MODEL_PROVIDER 必须为 deepseek 或 openai")
+        if provider not in ("deepseek", "openai", "ollama"):
+            raise ValueError("MODEL_PROVIDER 必须为 deepseek、openai 或 ollama")
+        if provider == "ollama":
+            return cls(model=value("OLLAMA_MODEL", "qwen3.5:4b"), provider=provider, log_mode=log_mode,
+                       ollama_base_url=value("OLLAMA_BASE_URL", "http://localhost:11434/v1"))
         model = value("OPENAI_MODEL") if provider == "openai" else value("DEEPSEEK_MODEL", "deepseek-flash")
         if not model:
             raise ValueError("请设置OPENAI_MODEL为本次要测试且账号可用的模型")

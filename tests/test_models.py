@@ -33,6 +33,53 @@ def test_provider_config_keeps_keys_separate_and_existing_conversations(monkeypa
         Settings.load()
 
 
+def test_ollama_config_needs_no_key(monkeypatch):
+    for name in ["MODEL_PROVIDER", "OLLAMA_MODEL", "OLLAMA_BASE_URL"]:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr("backend.config.dotenv_values", lambda *args, **kwargs: {
+        "MODEL_PROVIDER": "ollama", "DEEPSEEK_API_KEY": "deepseek-test"})
+    settings = Settings.load()
+    assert settings.api_key == "" and settings.model_ready
+    assert settings.conversation_model == "ollama:qwen3.5:4b"
+    assert settings.ollama_base_url == "http://localhost:11434/v1"
+    monkeypatch.setenv("OLLAMA_MODEL", "other:14b")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:9000/v1")
+    settings = Settings.load()
+    assert settings.conversation_model == "ollama:other:14b"
+    assert settings.ollama_base_url == "http://127.0.0.1:9000/v1"
+    assert not Settings(api_key="").model_ready and Settings(api_key="k").model_ready
+
+
+async def test_ollama_tool_roundtrip_uses_local_endpoint_without_thinking():
+    settings = Settings(provider="ollama", model="qwen3.5:4b")
+    requests, calls = [], []
+
+    async def search(query, document_id, node_id, sent_cards):
+        calls.append(query)
+        return {"items": [], "rule_cards": [], "queries": query}
+
+    def handler(request):
+        assert request.url.host == "localhost" and request.url.port == 11434
+        assert request.url.path == "/v1/chat/completions"
+        body = json.loads(request.content)
+        requests.append(body)
+        assert body["model"] == "qwen3.5:4b" and body["reasoning_effort"] == "none"
+        assert "thinking" not in body and "user_id" not in body and "store" not in body
+        assert all(t["function"].get("strict", False) is False for t in body["tools"])
+        message = {"role": "assistant", "tool_calls": [{"id": "call_1", "type": "function", "function": {
+            "name": "search_documents", "arguments": json.dumps({"queries": ["住宿限额"]})}}]} if len(requests) == 1 else {
+            "role": "assistant", "content": "完成"}
+        return httpx2.Response(200, json={
+            "id": f"chat_{len(requests)}", "object": "chat.completion", "created": 1, "model": settings.model,
+            "choices": [{"index": 0, "message": message, "finish_reason": "tool_calls" if len(requests) == 1 else "stop"}]})
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
+        model = create_model(settings, http_client=client)
+        agent = create_agent(settings, "user", SimpleNamespace(knowledge=SimpleNamespace(search_bundle=search)), model=model)
+        result = await agent.run("检查工具流转")
+    assert result.output == "完成" and calls == [["住宿限额"]] and len(requests) == 2
+
+
 @pytest.mark.parametrize("api", ["responses", "chat_completions"])
 @pytest.mark.parametrize("tool_name", ["search_documents", "ask_question"])
 async def test_openai_tool_roundtrip_has_no_deepseek_parameters(api, tool_name):

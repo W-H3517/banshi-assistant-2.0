@@ -76,7 +76,7 @@ class ChatService:
                     raise HTTPException(422, "回答不能为空")
             elif not prompt.strip() or answers:
                 raise HTTPException(422, "请输入消息；当前没有待回答的工具问题")
-            if not self.settings.api_key:
+            if not self.settings.model_ready:
                 raise HTTPException(503, "模型密钥尚未配置，资料库仍可使用")
         return conversation
 
