@@ -9,7 +9,7 @@ from urllib.request import urlopen
 import pypdfium2 as pdfium
 from rapidocr import RapidOCR
 
-from .pdf import InvalidPDF
+from .pages import InvalidPDF
 
 logger = logging.getLogger(__name__)
 # PDFium 即使处理不同文档也不能并行调用。

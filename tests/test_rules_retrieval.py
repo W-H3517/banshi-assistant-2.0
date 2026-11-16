@@ -1,4 +1,3 @@
-from copy import deepcopy
 from io import BytesIO
 
 import pytest
@@ -11,9 +10,8 @@ from backend.app import create_app
 from backend.config import Settings
 from backend.embeddings import LocalEmbeddings
 from backend.indexing import prepare_document
-from backend.pdf_tables import continue_region_keys, retrieval_row
-from tests_stage2.pdf_helpers import make_pdf
-from tests_stage2.test_app import login
+from tests.pdf_helpers import make_pdf
+from tests.test_app import login
 
 
 def test_effect_separated_signature_excluded_and_questions_locatable(tmp_path):
@@ -32,8 +30,8 @@ def test_effect_separated_signature_excluded_and_questions_locatable(tmp_path):
         rule = bundle['rule_cards'][0]['rules'][0]
         assert rule['content'].startswith('本通知') and rule['boundary_status'] == 'confirmed'
         assert '财务处' not in rule['content']
-        snap, _ = client.portal.call(kb.snapshots, doc['id'])[doc['id']]
-        assert not any('特此通知' in c['content'] for c in snap['preview']['chunks'])
+        chunks = client.portal.call(kb.preview, doc['id'])['chunks']
+        assert not any('特此通知' in c['content'] for c in chunks)
         raw = client.portal.call(kb.read, rule['node_id'], 'page', 1, None, 1)
         assert any('财务处' in i['content'] for i in raw['items'])
 
@@ -57,47 +55,7 @@ def test_cover_title_and_revision_are_not_search_chunks():
     embeddings = LocalEmbeddings(Settings().model_cache_dir)
     title, snapshot = prepare_document(output.getvalue(), 'handbook.pdf', embeddings, None)
     assert title == '示例财务手册'
-    assert all(1 not in chunk['pages'] for chunk in snapshot['preview']['chunks'])
-
-
-def test_cross_page_keys_have_geometry_and_do_not_fill_amounts():
-    def cell(value, box):
-        return {'value': value, 'bbox': box, 'source_row': 1, 'source_column': 1}
-    origin = [cell('28', [0, 90, 10, 100]), cell('四川', [10, 90, 20, 100]),
-              cell('成都', [20, 90, 30, 100]), cell('900', [30, 90, 40, 100])]
-    grid = [[cell('', [0, 0, 10, 20]), cell('', [10, 0, 20, 20]),
-             cell('阿坝', [20, 0, 30, 10]), cell('', [30, 0, 40, 10])],
-            [cell('', [0, 0, 10, 20]), cell('', [10, 0, 20, 20]),
-             cell('其他地区', [20, 10, 30, 20]), cell('300', [30, 10, 40, 20])]]
-    previous = {'last_fields': origin, 'page': 1, 'bottom': 100}
-    result = continue_region_keys(grid, ['序号', '地区', '地区', '一类'], previous)
-    assert all(row[1]['value'] == '四川' for row in result)
-    assert result[0][1]['inherited_from']['page'] == 1 and result[0][1]['raw_value'] == ''
-    assert result[0][3]['value'] == '' and grid[0][1]['value'] == ''
-    # 非页尾来源、不同列语义不能继承。
-    wrong = deepcopy(previous)
-    wrong['bottom'] = 200
-    assert continue_region_keys(grid, ['序号', '地区', '地区', '一类'], wrong) == grid
-    assert continue_region_keys(grid, ['序号', '部门', '金额', '一类'], previous) == grid
-
-    # 只有一个地区列时，第三列可能已是金额，不能按位置继承。
-    short_grid = [[cell('', [0, 0, 10, 10]), cell('', [10, 0, 20, 10]),
-                   cell('', [20, 0, 30, 10])]]
-    short_previous = {'last_fields': origin[:2] + [cell('900', [20, 90, 30, 100])],
-                      'page': 1, 'bottom': 100}
-    short_result = continue_region_keys(short_grid, ['序号', '地区', '金额'], short_previous)
-    assert short_result[0][1]['value'] == '四川' and short_result[0][2]['value'] == ''
-
-
-def test_table_summary_preserves_season_and_omits_empty_fields():
-    fields = [{'name': name, 'value': value} for name, value in [
-        ('序号', '7'), ('地区（列2）', '大连'), ('地区（列3）', '全市'),
-        ('住宿费标准 / 三类', '350'), ('旺季浮动标准 / 旺季 / 期间', '7-9月'),
-        ('旺季浮动标准 / 旺季上浮价 / 三类', '420'), ('备注', ''),
-    ]]
-    text = retrieval_row(fields, '元/人·天', '住宿表')
-    assert all(term in text for term in ['大连', '全市', '普通三类：350', '旺季三类：420', '7-9月', '元/人·天'])
-    assert '空白' not in text and '备注' not in text and '序号' not in text
+    assert all(1 not in chunk['pages'] for chunk in snapshot['chunks'])
 
 
 def test_multiple_queries_reserve_candidates_and_rules_have_references(tmp_path):

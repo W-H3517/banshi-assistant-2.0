@@ -6,8 +6,8 @@ import re
 def build_rule_card(structure):
     rules = []
     nodes = {n["id"]: n for n in structure["nodes"]}
-    for unit in structure["reading_units"]:
-        if unit["kind"] in ("table_row", "chapter"):
+    for unit in structure["units"]:
+        if unit["kind"] in ("table", "table_row", "chapter"):
             continue
         for match in re.finditer(r"[^\n]+", unit["content"]):
             text = match[0]

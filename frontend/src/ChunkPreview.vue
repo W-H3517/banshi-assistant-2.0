@@ -9,10 +9,9 @@ interface Region { page: number; x: number; y: number; width: number; height: nu
 interface Chunk {
   ordinal: number; title: string; chapter: string; pages: number[]; content: string;
   token_count: number; regions: Region[]; location_status: 'complete' | 'partial' | 'unlocated';
-  needs_review?: boolean; over_budget?: boolean; row?: number; header_pages?: number[];
+  row?: number; header_pages?: number[];
   warnings?: string[];
   source: { document_title: string; filename: string; chapter: string; article: string };
-  retrieval_text: string;
   boundary_status: 'confirmed' | 'uncertain' | 'broken';
   boundary_reasons: string[];
 }
@@ -120,7 +119,7 @@ onBeforeUnmount(() => {
 
 <template>
   <el-dialog v-model="visible" :title="`切分预览 · ${document.title}`" width="96vw" top="3vh" destroy-on-close @closed="emit('close')">
-    <p class="preview-note">当前检索片段 · 已融合文件、章节和条目信息。悬停查看，点击固定；跨行、跨页同色。</p>
+    <p class="preview-note">当前实际入库的检索片段；下方正文即用于检索的文本。悬停查看，点击固定；跨行、跨页同色。</p>
     <div v-if="error" class="preview-error"><el-alert :title="error" type="error" :closable="false" /><el-button :disabled="loading" @click="load">重试</el-button></div>
     <div v-loading="loading" element-loading-text="正在加载 PDF 和切分结果…" class="preview-body">
       <template v-if="result && pdf">
@@ -159,11 +158,9 @@ onBeforeUnmount(() => {
             <p v-for="reason in active.boundary_reasons" :key="reason" class="location-warning">{{ reason }}</p>
             <p>PDF {{ active.pages.join('、') }} 页 <span v-if="active.pages.length > 1">· 跨页片段</span></p>
             <p :class="{ 'location-warning': active.location_status !== 'complete' }">{{ statusLabels[active.location_status] }}</p>
-            <p v-if="active.needs_review && active.row !== undefined" class="location-warning">表格第 {{ active.row }} 行 · 字段关系待核对；表头来源第 {{ active.header_pages?.join('、') }} 页。高亮为本行实际来源单元格。</p>
+            <p v-if="active.row !== undefined" class="location-warning">表格第 {{ active.row }} 行 · 表头来源第 {{ active.header_pages?.join('、') }} 页。高亮为本行实际来源单元格，不含承接上页的值。</p>
             <p v-for="warning in active.warnings || []" :key="warning" class="location-warning">{{ warning }}</p>
-            <el-tag v-if="active.over_budget" type="warning">超过模型输入上限</el-tag>
             <pre>{{ active.content }}</pre>
-            <details><summary>查看用于检索的完整片段</summary><pre>{{ active.retrieval_text }}</pre></details>
             <p v-if="pinned === active.ordinal" class="preview-note">已固定，点击 PDF 空白处取消。</p>
           </template>
           <p v-else class="preview-note">将鼠标移到高亮区域查看片段，或从上方选择。</p>

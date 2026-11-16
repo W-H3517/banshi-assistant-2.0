@@ -10,9 +10,11 @@ import numpy as np
 from sqlalchemy import delete, select, text
 
 from .config import Settings
-from .db import Chunk, Conversation, Database, Document, DocumentParse
+from .db import Chunk, Conversation, Database, Document, DocumentIndex
 from .indexing import INDEX_VERSION
 from .knowledge import KnowledgeBase
+
+LEGACY_TABLES = ("chunks", "document_parses")
 
 
 async def prepare(db, settings, output):
@@ -50,7 +52,7 @@ async def apply(db, output):
             raise ValueError("准备产物版本或哈希不符，请重新准备")
         snapshot = json.loads(payload.read_text(encoding="utf-8"))
         vectors = np.load(vector_path, allow_pickle=False)
-        if snapshot["version"] != INDEX_VERSION or len(vectors) != len(snapshot["preview"]["chunks"]):
+        if snapshot["version"] != INDEX_VERSION or len(vectors) != len(snapshot["chunks"]):
             raise ValueError("结构片段与向量不一致")
         prepared.append((entry, snapshot, vectors))
     async with db.sessions() as session:
@@ -67,11 +69,14 @@ async def apply(db, output):
                 if hashlib.sha256(raw).hexdigest() != entry["sha256"]:
                     raise ValueError("原PDF哈希不符，取消替换")
             await session.execute(delete(Chunk))
-            await session.execute(delete(DocumentParse))
+            await session.execute(delete(DocumentIndex))
+            # 上一代索引的两张表已整体舍弃，随本次替换在同一事务内移除。
+            for legacy in LEGACY_TABLES:
+                await session.execute(text(f"DROP TABLE IF EXISTS {legacy}"))
             for entry, snapshot, vectors in prepared:
                 document = documents[entry["id"]]
                 document.title = entry["title"]
-                document.preview = snapshot["preview"]["chunks"][0]["content"][:160]
+                document.preview = snapshot["chunks"][0]["content"][:160]
                 KnowledgeBase.store_index(session, document, snapshot, vectors)
             await session.commit()
         except BaseException:
@@ -91,6 +96,7 @@ async def main():
     settings = Settings(data_dir=args.data_dir)  # 不加载.env或外部聊天密钥
     db = Database(settings)
     try:
+        await db.create_tables()
         if args.prepare:
             await prepare(db, settings, args.output)
         else:

@@ -9,16 +9,14 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
 from backend.app import create_app
 from backend.config import Settings
 from backend.embeddings import LocalEmbeddings
-from backend.indexing import INDEX_VERSION, assign_context, build_chunks
-from backend.pdf_structure import convert_pdf
-from tests_stage2.pdf_helpers import make_pdf
-from tests_stage2.test_app import login
+from backend.indexing import INDEX_VERSION, prepare_document
+from backend.parsing import parse_pdf
+from tests.pdf_helpers import make_pdf
+from tests.test_app import login
 
 
-def indexed(raw, title, embeddings):
-    parsed = convert_pdf(raw, title)
-    assign_context(parsed["sections"], title)
-    return build_chunks(parsed, title, title+".pdf", embeddings)
+def indexed(raw, embeddings):
+    return prepare_document(raw, "example.pdf", embeddings, None)[1]
 
 
 def test_cross_page_articles_preserve_all_paragraphs():
@@ -26,7 +24,7 @@ def test_cross_page_articles_preserve_all_paragraphs():
         "示例管理办法\n第一章 总则\n第一条 出差人员应提交住宿\n发票，并按照以下条件办理，",
         "经批准后可以报销。\n另有特殊限制。\n第二条 不得重复报销。\n附件：1.标准表",
     ])
-    result = convert_pdf(raw)
+    result = parse_pdf(raw)
     articles = [s for s in result["sections"] if s["kind"] == "article"]
     assert len(articles) == 2
     assert articles[0]["pages"] == [1, 2]
@@ -50,7 +48,7 @@ def test_only_margin_page_numbers_are_removed():
         canvas.drawString(280, 25, f"- {number} -")
         canvas.showPage()
     canvas.save()
-    result = convert_pdf(stream.getvalue())
+    result = parse_pdf(stream.getvalue())
     assert "123" in result["sections"][0]["content"]
     assert [r["text"] for r in result["removed_lines"]] == ["- 1 -", "- 2 -"]
 
@@ -60,7 +58,7 @@ def test_table_preserves_cells_without_duplicating_text_or_guessing_headers():
     table = Table([["Region", "Limit"], ["City A", "500"], ["City B", "400"]])
     table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 1, colors.black)]))
     SimpleDocTemplate(stream).build([table])
-    result = convert_pdf(stream.getvalue())
+    result = parse_pdf(stream.getvalue())
     tables = [s for s in result["sections"] if s["kind"] == "table"]
     assert len(tables) == 1
     assert "Region | Limit" in tables[0]["content"]
@@ -71,20 +69,20 @@ def test_preview_chunks_keep_page_mapping_and_model_budget():
     embeddings = LocalEmbeddings(Settings().model_cache_dir)
     raw = make_pdf(["测试制度\n第一条 " + "提交完整证明材料，经审批后办理。" * 20,
                     "跨页补充限制不得遗漏。\n第二条 另一项规定。"])
-    result = indexed(raw, "测试制度", embeddings)
+    result = indexed(raw, embeddings)
     assert any(c["pages"] == [1, 2] for c in result["chunks"])
     assert all(c["token_count"] <= 512 for c in result["chunks"])
     assert any("跨页补充限制" in c["content"] for c in result["chunks"])
-    sections = convert_pdf(raw, "测试制度")["sections"]
+    units = {u["id"]: u for u in result["units"]}
     for chunk in result["chunks"]:
         assert chunk["location_status"] == "complete"
         assert {r["page"] for r in chunk["regions"]} == set(chunk["pages"])
         for rect in chunk["regions"]:
             assert 0 <= rect["x"] < rect["x"] + rect["width"] <= 1
             assert 0 <= rect["y"] < rect["y"] + rect["height"] <= 1
-        parent = sections[chunk["section_id"] - 1]
+        parent = units[chunk["unit_id"]]
         assert chunk["content"] == parent["content"][chunk["start"]:chunk["end"]]
-        assert set(chunk["pages"]).issubset(parent["pages"])
+        assert set(chunk["pages"]).issubset({s["page"] for s in parent["spans"]})
 
 
 def test_preview_permissions_and_no_index_mutations(tmp_path):
@@ -126,8 +124,8 @@ def test_text_highlight_stops_at_chunk_boundary_and_tracks_repeated_text():
             return [{"content": "ABC", "start": 0, "end": 3},
                     {"content": "ABC", "start": 4, "end": 7}]
 
-    raw = make_pdf(["ABC ABC"], font="Helvetica")
-    result = indexed(raw, "Example", Splitter())
+    raw = make_pdf(["Example\nABC ABC"], font="Helvetica")
+    result = indexed(raw, Splitter())
     first, second = result["chunks"]
     assert first["location_status"] == second["location_status"] == "complete"
     assert len(first["regions"]) == len(second["regions"]) == 1
@@ -143,10 +141,9 @@ def test_table_chunks_highlight_shared_source_cells():
     table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 1, colors.black),
                                ("SPAN", (0, 1), (0, 2))]))
     SimpleDocTemplate(stream).build([table])
-    result = indexed(stream.getvalue(), "Example",
-                              LocalEmbeddings(Settings().model_cache_dir))
+    result = indexed(stream.getvalue(), LocalEmbeddings(Settings().model_cache_dir))
     a, b = result["chunks"]
-    assert a["needs_review"] and b["needs_review"]
+    assert a["warnings"] and b["warnings"] and (a["row"], b["row"]) == (2, 3)
     assert a["location_status"] == b["location_status"] == "complete"
     assert len(a["regions"]) == len(b["regions"]) == 2
     assert a["regions"][0] == b["regions"][0]

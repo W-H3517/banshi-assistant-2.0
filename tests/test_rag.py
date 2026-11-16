@@ -15,9 +15,10 @@ from backend.config import Settings
 from backend.db import Chunk, Database, Document, User
 from backend.embeddings import LocalEmbeddings
 from backend.knowledge import MAX_RESULTS, DuplicateDocument, KnowledgeBase, terms
-from backend.pdf import InvalidPDF, extract_pages
-from tests_stage2.pdf_helpers import make_pdf
-from tests_stage2.test_app import login
+from backend.parsing import InvalidPDF
+from backend.parsing.pages import extract_pages
+from tests.pdf_helpers import make_pdf
+from tests.test_app import login
 
 
 @pytest.fixture(scope="module")
@@ -30,10 +31,8 @@ def test_long_text_is_chunked_without_truncating_tail(embeddings):
     text = "长篇制度。" + "员工办理申请时应提交真实完整材料，并由负责人确认适用范围。" * 120
     text += "\n最终例外：应急采购金额上限为八千元。"
     chunks = embeddings.split(text)
-    for chunk in chunks:
-        chunk["retrieval_text"] = chunk["content"]
-    assert all(len(chunk["retrieval_text"]) <= 1000 for chunk in chunks)
-    assert all(len(embeddings.tokenizer.encode(chunk["retrieval_text"]).ids) <= 512 for chunk in chunks)
+    assert all(len(chunk["content"]) <= 1000 for chunk in chunks)
+    assert all(len(embeddings.tokenizer.encode(chunk["content"]).ids) <= 512 for chunk in chunks)
     vectors = embeddings.passages(chunks)
     assert vectors.shape == (len(chunks), 512)
     assert np.allclose(np.linalg.norm(vectors, axis=1), 1, atol=1e-5)
@@ -48,9 +47,13 @@ def test_detect_scanned_and_reject_encrypted_empty_and_broken_pdf():
     canvas.drawImage(ImageReader(Image.new("RGB", (200, 200), "white")), 20, 20, 500, 700)
     canvas.showPage()
     canvas.save()
-    scan_pages = []
-    assert extract_pages(scanned.getvalue(), scan_pages=scan_pages) == [""]
-    assert scan_pages == [1]
+    class Recognizer:
+        def extract_page(self, raw, number, view):
+            return [{"text": "扫描内容", "confidence": .99, "boxes": [None] * 4,
+                     "polygon": [[10, 10], [90, 10], [90, 30], [10, 30]]}]
+
+    page, = extract_pages(scanned.getvalue(), Recognizer())
+    assert page["ocr"] and [b["method"] for b in page["blocks"]] == ["ocr"]
     with pytest.raises(InvalidPDF, match="OCR"):
         extract_pages(scanned.getvalue())
     with pytest.raises(InvalidPDF, match="加密"):

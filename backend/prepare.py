@@ -2,7 +2,7 @@
 
 from .config import Settings
 from .embeddings import MODEL_NAME, LocalEmbeddings
-from .ocr import model_paths
+from .parsing.ocr import model_paths
 
 
 def main():

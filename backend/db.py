@@ -68,22 +68,36 @@ class SeedImport(Base):
     sha256: Mapped[str] = mapped_column(String, primary_key=True)
 
 
-class DocumentParse(Base):
-    """全部 PDF 的结构、来源及实际检索片段快照，与原文同事务保存。"""
+class DocumentIndex(Base):
+    """由原 PDF 派生的索引，与原文同事务保存。
 
-    __tablename__ = "document_parses"
+    按用途分列：检索、定位只读 meta 与 nodes；正文、表格、原页块在阅读时按文档读取。
+    """
+
+    __tablename__ = "document_indexes"
     document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), primary_key=True)
-    payload: Mapped[dict] = mapped_column(JSON)
+    version: Mapped[str]
+    generation: Mapped[str] = mapped_column(String, unique=True)
+    meta: Mapped[dict] = mapped_column(JSON)
+    nodes: Mapped[list] = mapped_column(JSON)
+    units: Mapped[list] = mapped_column(JSON, deferred=True)
+    tables: Mapped[list] = mapped_column(JSON, deferred=True)
+    blocks: Mapped[list] = mapped_column(JSON, deferred=True)
+    rules: Mapped[dict] = mapped_column(JSON, deferred=True)
 
 
 class Chunk(Base):
-    __tablename__ = "chunks"
+    """检索片段：正文与向量参与排名，node_id 用于按阅读单元分组，其余明细按命中读取。"""
+
+    __tablename__ = "index_chunks"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), index=True)
-    page: Mapped[int]
     ordinal: Mapped[int]
+    node_id: Mapped[str]
+    page: Mapped[int]
     content: Mapped[str] = mapped_column(Text)
     vector: Mapped[bytes] = mapped_column(LargeBinary)
+    detail: Mapped[dict] = mapped_column(JSON, deferred=True)
 
 
 class Conversation(Base):
@@ -118,9 +132,12 @@ class Database:
 
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
 
-    async def initialize(self):
+    async def create_tables(self):
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
+
+    async def initialize(self):
+        await self.create_tables()
         async with self.sessions() as session:
             if not await session.scalar(select(User.id).limit(1)):
                 users = [User(username=username, name=name, role=role,

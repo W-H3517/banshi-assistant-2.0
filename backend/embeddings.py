@@ -62,7 +62,7 @@ class LocalEmbeddings:
         return chunks
 
     def passages(self, chunks):
-        texts = [chunk["retrieval_text"] for chunk in chunks]
+        texts = [chunk["content"] for chunk in chunks]
         if any(len(self.tokenizer.encode(text).ids) > 512 for text in texts):
             raise ValueError("片段超过嵌入模型输入限制")
         with self.lock:

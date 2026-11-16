@@ -14,7 +14,7 @@ from backend.agent import create_agent
 from backend.chat import ChatService, owned
 from backend.config import Settings
 from backend.db import Conversation, Database, User
-from tests_stage2.test_app import sse, tool
+from tests.test_app import sse, tool
 
 
 async def wait(awaitable):

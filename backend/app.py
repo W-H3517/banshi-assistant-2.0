@@ -18,11 +18,11 @@ from .agent import create_agent
 from .auth import COOKIE, current_user, digest, public_user
 from .chat import ChatService, detail, owned
 from .config import ROOT, Settings
-from .db import Conversation, Database, Document, DocumentParse, Login, User, check_password
+from .db import Conversation, Database, Document, Login, User, check_password
 from .knowledge import DuplicateDocument, KnowledgeBase, public_document
 from .logging_setup import LoggingRuntime
-from .ocr import OCRUnavailable
-from .pdf import MAX_FILE_BYTES, InvalidPDF
+from .parsing import MAX_FILE_BYTES, InvalidPDF
+from .parsing.ocr import OCRUnavailable
 
 UserDep = Annotated[User, Depends(current_user)]
 
@@ -35,6 +35,11 @@ class Credentials(BaseModel):
 class Turn(BaseModel):
     prompt: str = Field(default="", max_length=12000)
     answers: dict[str, str] = Field(default_factory=dict)
+
+
+def require_admin(user, action):
+    if user.role != "admin":
+        raise HTTPException(403, f"仅管理员可以{action}")
 
 
 def create_app(settings=None, *, agent_factory=create_agent):
@@ -114,8 +119,7 @@ def create_app(settings=None, *, agent_factory=create_agent):
 
     @app.post("/api/admin/reset-demo")
     async def reset_demo(user: UserDep):
-        if user.role != "admin":
-            raise HTTPException(403, "仅管理员可以重置测试数据")
+        require_admin(user, "重置测试数据")
         chat = app.state.chat
         async with chat.lifecycle_lock:
             for task in list(chat.tasks.values()):
@@ -128,8 +132,7 @@ def create_app(settings=None, *, agent_factory=create_agent):
 
     @app.post("/api/documents", status_code=201)
     async def upload(file: UploadFile, user: UserDep):
-        if user.role != "admin":
-            raise HTTPException(403, "仅管理员可以上传制度")
+        require_admin(user, "上传制度")
         filename = Path((file.filename or "").replace("\\", "/")).name
         if not filename.lower().endswith(".pdf"):
             raise HTTPException(422, "请上传 .pdf 制度文件")
@@ -150,8 +153,7 @@ def create_app(settings=None, *, agent_factory=create_agent):
 
     @app.delete("/api/documents/{document_id}")
     async def delete_document(document_id: str, user: UserDep):
-        if user.role != "admin":
-            raise HTTPException(403, "仅管理员可以删除制度")
+        require_admin(user, "删除制度")
         if not await app.state.db.knowledge.delete_document(document_id):
             raise HTTPException(404, "制度不存在")
         return {"ok": True}
@@ -166,14 +168,11 @@ def create_app(settings=None, *, agent_factory=create_agent):
 
     @app.get("/api/documents/{document_id}/chunk-preview")
     async def chunk_preview(document_id: str, user: UserDep):
-        if user.role != "admin":
-            raise HTTPException(403, "仅管理员可以查看切分预览")
-        async with app.state.db.sessions() as session:
-            doc = await session.get(Document, document_id)
-            if doc is None:
-                raise HTTPException(404, "制度不存在")
-            parsed = await session.get(DocumentParse, document_id)
-            return {**parsed.payload["preview"], "document": public_document(doc)}
+        require_admin(user, "查看切分预览")
+        preview = await app.state.db.knowledge.preview(document_id)
+        if preview is None:
+            raise HTTPException(404, "制度不存在")
+        return preview
 
     @app.get("/api/documents/{document_id}/file")
     async def original_pdf(document_id: str, user: UserDep):

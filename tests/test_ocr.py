@@ -9,13 +9,14 @@ from sqlalchemy import func, select
 
 from backend.app import create_app
 from backend.config import Settings
-from backend.db import Chunk, Document, DocumentParse
+from backend.db import Chunk, Document, DocumentIndex
 from backend.embeddings import LocalEmbeddings
-from backend.indexing import INDEX_VERSION, assign_context, build_chunks
-from backend.ocr import LocalOCR, OCRUnavailable, model_paths
-from backend.pdf import InvalidPDF, extract_pages
-from backend.pdf_structure import convert_pdf
-from tests_stage2.test_app import login
+from backend.indexing import INDEX_VERSION
+from backend.indexing.chunks import build_chunks
+from backend.indexing.structure import build_structure
+from backend.parsing import InvalidPDF, parse_pdf
+from backend.parsing.ocr import LocalOCR, OCRUnavailable, model_paths
+from tests.test_app import login
 
 
 def scanned_pdf(*, mixed=False):
@@ -61,14 +62,18 @@ def fake_recognizer(monkeypatch):
 def test_paragraph_mapping_mixed_pages_and_long_paragraph_budget(tmp_path, monkeypatch):
     calls = fake_recognizer(monkeypatch)
     raw = scanned_pdf(mixed=True)
-    scanned = []
-    pages = extract_pages(raw, scan_pages=scanned)
-    assert scanned == [1, 2] and "Native text" in pages[2]
-    parsed = convert_pdf(raw, "通知", ocr=LocalOCR(tmp_path), scan_pages=scanned)
-    assert len(calls) == 2
+    parsed = parse_pdf(raw, LocalOCR(tmp_path))
+    # 只有扫描页送去识别，文字页保留原文字层。
+    assert len(calls) == 2 and [p["ocr"] for p in parsed["pages"]] == [True, True, False]
+    assert parsed["pages"][2]["blocks"][0]["method"] == "native"
+    assert parsed["document_title"] == "通知"
     embeddings = LocalEmbeddings(Settings().model_cache_dir)
-    assign_context(parsed["sections"], "通知")
-    preview = build_chunks(parsed, "通知", "通知.pdf", embeddings)
+
+    def chunked(sections):
+        structure = build_structure(sections, [], "通知", "通知.pdf")
+        return build_chunks(structure, [], parsed["pages"], "通知", embeddings)
+
+    preview = {"chunks": chunked(parsed["sections"])}
     cross_page = next(c for c in preview['chunks'] if len(c['pages']) > 1)
     assert cross_page['content'].replace('\n', '') == '1.办理事项。申请人应当提交完整材料并在审核通过后办理。不得提前领取。'
     assert cross_page['pages'] == [1, 2] and len(cross_page['regions']) == 3
@@ -84,8 +89,7 @@ def test_paragraph_mapping_mixed_pages_and_long_paragraph_budget(tmp_path, monke
     section['source_spans'] = [{'start': 0, 'end': len(section['content']), 'page': 1,
                                'boxes': [[60, 100, 90, 120]] * len(section['content']),
                                'confidence': .99}]
-    parsed['sections'] = [section]
-    chunks = build_chunks(parsed, '通知', '通知.pdf', embeddings)['chunks']
+    chunks = chunked([section])
     assert len(chunks) > 1 and chunks[-1]['content'].endswith('最终例外须保留。')
     assert all(c['token_count'] <= 512 for c in chunks)
     assert all('超过输入预算' in ''.join(c['warnings']) for c in chunks)
@@ -95,7 +99,7 @@ def test_paragraph_mapping_mixed_pages_and_long_paragraph_budget(tmp_path, monke
 def test_ocr_models_missing_never_download_during_request(tmp_path, monkeypatch):
     def no_network(*args, **kwargs):
         pytest.fail('request must not download models')
-    monkeypatch.setattr('backend.ocr.urlopen', no_network)
+    monkeypatch.setattr('backend.parsing.ocr.urlopen', no_network)
     with pytest.raises(OCRUnavailable, match='backend.prepare'):
         model_paths(tmp_path)
 
@@ -123,7 +127,7 @@ def test_scanned_upload_preview_search_restart_and_delete(tmp_path, monkeypatch)
             async with client.app.state.db.sessions() as session:
                 chunks = list(await session.scalars(select(Chunk).where(
                     Chunk.document_id == document['id']).order_by(Chunk.ordinal)))
-                assert [c.content for c in chunks] == [c['retrieval_text'] for c in preview['chunks']]
+                assert [c.content for c in chunks] == [c['content'] for c in preview['chunks']]
         client.portal.call(check_rows)
         assert client.post('/api/documents', files={'file': ('重复.pdf', raw)}).status_code == 409
         login(client, 'alice')
@@ -136,7 +140,7 @@ def test_scanned_upload_preview_search_restart_and_delete(tmp_path, monkeypatch)
         assert client.delete(path).status_code == 200
         async def check_deleted():
             async with client.app.state.db.sessions() as session:
-                assert await session.get(DocumentParse, document['id']) is None
+                assert await session.get(DocumentIndex, document['id']) is None
         client.portal.call(check_deleted)
 
 
@@ -156,7 +160,7 @@ def test_ocr_failure_and_embedding_failure_leave_no_partial_data(tmp_path, monke
         assert client.get('/api/documents').json() == before
         async def counts():
             async with client.app.state.db.sessions() as session:
-                assert await session.scalar(select(func.count()).select_from(DocumentParse)) == len(before)
+                assert await session.scalar(select(func.count()).select_from(DocumentIndex)) == len(before)
                 assert await session.scalar(select(func.count()).select_from(Document)) == len(before)
         client.portal.call(counts)
 
@@ -164,4 +168,4 @@ def test_ocr_failure_and_embedding_failure_leave_no_partial_data(tmp_path, monke
 def test_empty_scanned_page_is_not_silently_skipped(tmp_path, monkeypatch):
     monkeypatch.setattr(LocalOCR, 'recognize', lambda *args: [])
     with pytest.raises(InvalidPDF, match='第 1 页未识别到文字'):
-        convert_pdf(scanned_pdf(), ocr=LocalOCR(tmp_path), scan_pages=[1, 2])
+        parse_pdf(scanned_pdf(), LocalOCR(tmp_path))

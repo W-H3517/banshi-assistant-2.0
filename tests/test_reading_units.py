@@ -13,15 +13,15 @@ from sqlalchemy import select
 
 from backend.app import create_app
 from backend.config import Settings
-from backend.db import Chunk, Document, DocumentParse
+from backend.db import Chunk, Document, DocumentIndex
 from backend.embeddings import LocalEmbeddings
 from backend.indexing import prepare_document
 from backend.knowledge import KnowledgeBase
-from backend.ocr import LocalOCR
-from backend.pdf_structure import assemble_document
+from backend.parsing.ocr import LocalOCR
+from backend.parsing.sections import assemble_document
 from backend.reindex import apply, prepare
-from tests_stage2.pdf_helpers import make_pdf
-from tests_stage2.test_app import login
+from tests.pdf_helpers import make_pdf
+from tests.test_app import login
 
 
 def test_toc_appendix_does_not_become_body_heading():
@@ -70,20 +70,29 @@ def test_mixed_pages_keep_tables_and_question_across_footer(tmp_path, monkeypatc
 
     monkeypatch.setattr(LocalOCR, "recognize", recognize)
     _, snapshot = prepare_document(output.getvalue(), "mixed.pdf", LocalEmbeddings(Settings().model_cache_dir), LocalOCR(tmp_path))
-    assert len(calls) == 1 and snapshot["preview"]["ocr_pages"] == [4]
-    units = snapshot["structure"]["reading_units"]
+    assert len(calls) == 1 and snapshot["meta"]["ocr_pages"] == [4]
+    units = snapshot["units"]
     question = next(u for u in units if "16.无住宿" in u["content"])
     assert "不承担市内交通费用" in question["content"] and "17." not in question["content"]
     assert {s["page"] for s in question["spans"]} == {1, 2}
-    assert all("- 1 -" not in c["content"] and "- 2 -" not in c["content"] for c in snapshot["preview"]["chunks"])
+    assert all("- 1 -" not in c["content"] and "- 2 -" not in c["content"] for c in snapshot["chunks"])
     row = next(u for u in units if u["kind"] == "table_row" and "Dalian" in u["content"])
     assert "420" in row["content"] and "Shanghai" not in row["content"]
-    assert row["table"]["header_paths"] == ["City", "Class III"]
-    assert row["table"]["unit"] == "元/人/天"
-    assert row["table"]["unit_sources"][0]["page"] == 3
+    table, = snapshot["tables"]
+    assert row["table_ref"] == {"table": table["id"], "row": 2}
+    assert table["columns"] == ["City", "Class III"]
+    assert table["unit"] == "元/人/天"
+    assert table["unit_sources"][0]["page"] == 3
     assert "附录一" in row["content"]
-    assert row["table"]["fields"][0]["bbox"] is not None
-    assert all("content" not in n for n in snapshot["structure"]["nodes"])
+    assert table["rows"][0]["cells"][0]["bbox"] is not None
+    # 单位说明已并入表格，不再单独成为检索片段；整表另有一个紧凑阅读单元。
+    assert not any(c["content"].startswith("单位") for c in snapshot["chunks"])
+    whole = next(u for u in units if u["kind"] == "table")
+    assert "Dalian | 420" in whole["content"] and "Shanghai | 500" in whole["content"]
+    # 正文只保存在阅读单元中；逐字坐标不入库。
+    assert all("content" not in n for n in snapshot["nodes"])
+    assert all(set(s) == {"start", "end", "page"} for u in units for s in u["spans"])
+    assert all("boxes" not in block for page in snapshot["blocks"] for block in page)
 
 
 def test_unknown_boundary_is_not_complete_and_raw_page_is_available(tmp_path):
@@ -118,8 +127,8 @@ def test_explicit_reindex_rolls_back_and_preserves_originals(tmp_path, monkeypat
             async with db.sessions() as session:
                 return (list((await session.execute(select(Document.id, Document.original).order_by(Document.id))).all()),
                         set(await session.scalars(select(Chunk.id))),
-                        [p.payload["structure"]["generation"] for p in await session.scalars(
-                            select(DocumentParse).order_by(DocumentParse.document_id))])
+                        list(await session.scalars(select(DocumentIndex.generation).order_by(
+                            DocumentIndex.document_id))))
 
         before = client.portal.call(state)
         client.portal.call(prepare, db, settings, output)

@@ -26,7 +26,8 @@ locate_document_structure（定位文件和结构）、read_document_content（�
 读取 pagination_complete=false 时继续用相同参数和 next_cursor 续读。
 boundary_status不是confirmed时，即使分页结束也不能宣称整条完整；用verification_hint按scope=page读取原页/续页核对。
 reading_complete仅表示显式边界内正文已读完，不保证OCR文字、表格解释正确，也不排除其他条款例外。
-表格行保留字段和单位，仍须注意解析警告。读取完整仅表示所选解析范围完整，可能需要补查其他条款或附件。
+搜索命中的是表格行；读取行节点得到该行全部字段，读取其父表格节点得到整表（表头只列一次、每行一条，※为承接上页合并单元格的值）。
+表格字段和单位为解析结果，仍须注意解析警告。读取完整仅表示所选解析范围完整，可能需要补查其他条款或附件。
 需要确认影响结论的条件时调用 ask_question，问题要简短，可给选项，用户也可自由回答。
 用户已明确给出的条件不重复询问；材料缺失不能靠追问用户事实来代替。用户要求不追问时，说明缺失依据和结论范围。
 涉及制度、材料、步骤、限额时必须查资料；搜索结果是片段，阅读范围由所选节点决定。
@@ -102,6 +103,7 @@ def create_agent(settings: Settings, user_id: str, db: Database, *, model=None):
         同父节点的前后段（每侧 0～3 段，不跨结构边界）。超长 pagination_complete=false，
         原参数不变并传 next_cursor 续读。scope=page且指定page可核验原页（包括页脚和脚注）。
         items 含正文、实际来源页、表格字段、边界状态及citation；分页结束不等于边界确认。
+        表格节点返回整表紧凑文本，表格行节点返回单行字段明细。
         默认省略表格几何明细；必要时按单个节点设置include_geometry=true读取完整字段及坐标。
 
         Args:

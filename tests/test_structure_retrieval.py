@@ -8,14 +8,16 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.deepseek import DeepSeekProvider
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
+from sqlalchemy import select
 
 from backend.agent import create_agent
 from backend.app import create_app
 from backend.config import Settings
-from backend.indexing import assign_context
-from backend.structure import build_structure, get_node, read_nodes, reading_content
-from tests_stage2.pdf_helpers import make_pdf
-from tests_stage2.test_app import login, sse, tool
+from backend.db import DocumentIndex
+from backend.indexing.structure import build_structure
+from backend.knowledge.outline import Outline
+from tests.pdf_helpers import make_pdf, text_sections
+from tests.test_app import login, sse, tool
 
 
 @pytest.fixture
@@ -53,9 +55,13 @@ def test_long_article_grouping_scoped_search_and_lossless_read(app_client):
     while not result["pagination_complete"]:
         result = client.portal.call(kb.read, target["chunk_id"], "article", 1, result["next_cursor"])
         items.extend(result["items"])
-    snapshots = client.portal.call(kb.snapshots, document_id)
-    structure = snapshots[document_id][0]["structure"]
-    original = reading_content(structure, get_node(structure, target["node_id"]))["content"]
+    async def stored_units():
+        async with kb.db.sessions() as session:
+            return await session.scalar(select(DocumentIndex.units).where(
+                DocumentIndex.document_id == document_id))
+
+    original = next(u["content"] for u in client.portal.call(stored_units)
+                    if u["node_id"] == target["node_id"])
     assert "".join(i["content"] for i in items) == original
     assert "最终例外" in original and "第二条" not in original
     assert len({p for i in items for p in i["pages"]}) > 1
@@ -81,12 +87,12 @@ def test_duplicate_labels_title_only_semantics_and_directory(app_client, monkeyp
     assert {d["id"] for d in client.get("/api/documents?q=重名办法").json()[:2]} == {one, two}
     found = client.portal.call(kb.locate, "重名办法")
     assert {n["id"] for n in found["items"]} == {one, two}
-    monkeypatch.setattr("backend.knowledge.LOCATE_LIMIT", 1)
+    monkeypatch.setattr("backend.knowledge.reading.LOCATE_LIMIT", 1)
     page_one = client.portal.call(kb.locate, "重名办法")
     assert not page_one["complete"]
     page_two = client.portal.call(kb.locate, "重名办法", None, None, page_one["next_cursor"])
     assert page_two["complete"] and page_one["items"][0]["id"] != page_two["items"][0]["id"]
-    monkeypatch.setattr("backend.knowledge.LOCATE_LIMIT", 30)
+    monkeypatch.setattr("backend.knowledge.reading.LOCATE_LIMIT", 30)
     articles = client.portal.call(kb.locate, "第一条", one)["items"]
     assert len(articles) == 2 and articles[0]["node_id"] != articles[1]["node_id"]
     chapter = client.portal.call(kb.locate, "产假", one)["items"][0]
@@ -104,18 +110,15 @@ def test_duplicate_labels_title_only_semantics_and_directory(app_client, monkeyp
 def test_nested_article_and_neighbors_do_not_cross_structure():
     texts = ["第一章总则", "第一条", "（一）申请材料", "1.凭证。应当完整。",
              "补充证明。", "不得代领。", "第二条 不得重复报销。", "第二章其他", "单独事项。"]
-    sections = [{"id": i + 1, "kind": "text", "title": text, "content": text,
-                 "pages": [1], "source_spans": [{"start": 0, "end": len(text), "page": 1}]}
-                for i, text in enumerate(texts)]
-    assign_context(sections, "测试")
-    structure = build_structure({"sections": sections}, {"chunks": []}, "测试", "测试.pdf")
-    target = next(n for n in structure["nodes"] if reading_content(structure, n)["content"] == "补充证明。")
-    _, neighbors = read_nodes(structure, target, "neighbors", 3)
-    assert [n["content"] for n in neighbors] == texts[3:6]
-    article, parts = read_nodes(structure, target, "article", 1)
+    structure = build_structure(text_sections(texts), [], "测试", "测试.pdf")
+    outline = Outline("doc", "测试", {}, structure["nodes"])
+    content = {u["node_id"]: u["content"] for u in structure["units"]}
+    target = next(n for n in outline.nodes if content.get(n["id"]) == "补充证明。")
+    _, neighbors = outline.select(target, "neighbors", 3)
+    assert [content[n["id"]] for n in neighbors] == texts[3:6]
+    article, parts = outline.select(target, "article", 1)
     assert article["label"] == "第一条"
-    assert [n["content"] for n in parts] == texts[1:6]
-    assert all("第二条" not in n["content"] for n in parts)
+    assert [content[n["id"]] for n in parts] == texts[1:6]
 
 
 def test_table_rows_keep_fields_and_read_separately(app_client):
@@ -140,6 +143,12 @@ def test_table_rows_keep_fields_and_read_separately(app_client):
     assert geometry["items"][0]["table"]["header_cells"]
     assert geometry["items"][0]["table"]["fields"][0]["bbox"]
     assert len(json.dumps(result)) < len(json.dumps(geometry))
+    # 读取父表格节点得到整表：表头一次、每行一条，不再逐行重复。
+    whole = client.portal.call(kb.read, result["items"][0]["parent_id"])
+    assert whole["target"]["kind"] == "table" and len(whole["items"]) == 1
+    text = whole["items"][0]["content"]
+    assert "列：Region | Limit" in text and "City A | 500" in text and "City B | 400" in text
+    assert whole["items"][0]["table"]["row_count"] == 2 and whole["reading_complete"]
 
 
 def test_agent_locate_read_search_and_sources(tmp_path):

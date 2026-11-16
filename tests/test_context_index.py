@@ -1,17 +1,17 @@
-from copy import deepcopy
-
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from backend.app import create_app
 from backend.config import Settings
-from backend.db import DocumentParse
+from backend.db import DocumentIndex
 from backend.embeddings import LocalEmbeddings
-from backend.indexing import assign_context, build_chunks, prepare_document
-from backend.pdf_structure import assemble_document
-from tests_stage2.pdf_helpers import make_pdf
-from tests_stage2.test_app import login
+from backend.indexing import prepare_document
+from backend.indexing.chunks import build_chunks
+from backend.indexing.structure import build_structure, source_path
+from backend.parsing.sections import assemble_document
+from tests.pdf_helpers import make_pdf, text_sections
+from tests.test_app import login
 
 
 def test_native_context_is_embedded_and_titles_are_not_chunks():
@@ -21,7 +21,7 @@ def test_native_context_is_embedded_and_titles_are_not_chunks():
         '经审核通过后办理。\n第二章 特殊规定\n第二条 不得重复报销。',
     ])
     _, snapshot = prepare_document(raw, '费用制度.pdf', embeddings, None)
-    chunks = snapshot['preview']['chunks']
+    chunks = snapshot['chunks']
     assert len(chunks) == 2
     assert chunks[0]['pages'] == [1, 2]
     assert chunks[0]['source'] == {'document_title': '报销办法', 'filename': '费用制度.pdf',
@@ -30,9 +30,8 @@ def test_native_context_is_embedded_and_titles_are_not_chunks():
     assert chunks[1]['source']['article'] == '第二条'
     for chunk in chunks:
         assert chunk['content'].startswith(chunk['source']['article'])
-        assert chunk['retrieval_text'] == chunk['content']
-        assert '文件：' not in chunk['retrieval_text']
-        assert chunk['token_count'] == len(embeddings.tokenizer.encode(chunk['retrieval_text']).ids)
+        assert '文件：' not in chunk['content']
+        assert chunk['token_count'] == len(embeddings.tokenizer.encode(chunk['content']).ids)
         assert chunk['location_status'] == 'complete'
 
 
@@ -55,8 +54,8 @@ def test_ocr_heading_and_article_survive_page_break_without_extra_title_chunks()
                                                   line['polygon'][2][0], line['polygon'][2][1]], 'edge': False}
                           for i,line in enumerate(page.pop('lines'))]
     parsed = assemble_document(pages, '出差通知')
-    assign_context(parsed['sections'], '出差通知')
-    chunks = build_chunks(parsed, '出差通知', '通知原件.pdf', LocalEmbeddings(Settings().model_cache_dir))['chunks']
+    structure = build_structure(parsed['sections'], [], '出差通知', '通知原件.pdf')
+    chunks = build_chunks(structure, [], pages, '出差通知', LocalEmbeddings(Settings().model_cache_dir))
     assert chunks[0]['source']['chapter'] == '一、规范出行'
     assert chunks[0]['source']['article'] == '1.等级标准'
     assert chunks[0]['pages'] == [1,2] and len(chunks[0]['regions']) == 3
@@ -66,14 +65,17 @@ def test_ocr_heading_and_article_survive_page_break_without_extra_title_chunks()
 
 
 def test_nested_headings_keep_article_and_do_not_leak_to_next_article():
-    texts = ['办法', '第一章总则', '第一条', '（一）申请材料', '1.凭证。应当完整。',
+    texts = ['第一章总则', '第一条', '（一）申请材料', '1.凭证。应当完整。',
              '第二条 应当留档。', '第二章费用', '1.标准。费用不得超过限额。']
-    sections = [{'content': text, 'kind': 'text', 'pages': [1]} for text in texts]
-    assign_context(sections, '办法')
-    assert sections[4]['article'] == '第一条 / 1.凭证'
-    assert sections[4]['chapter'] == '第一章总则 / （一）申请材料'
-    assert sections[5]['article'] == '第二条' and sections[5]['chapter'] == '第一章总则'
-    assert sections[7]['article'] == '1.标准' and sections[7]['chapter'] == '第二章费用'
+    structure = build_structure(text_sections(texts), [], '办法', '办法.pdf')
+    by_id = {n['id']: n for n in structure['nodes']}
+    paths = {u['content']: source_path(by_id, by_id[u['node_id']])
+             for u in structure['units'] if by_id[u['node_id']]['kind'] == 'paragraph'}
+    assert paths == {
+        '1.凭证。应当完整。': ('第一章总则 / （一）申请材料', '第一条 / 1.凭证'),
+        '第二条 应当留档。': ('第一章总则', '第二条'),
+        '1.标准。费用不得超过限额。': ('第二章费用', '1.标准'),
+    }
 
 
 def test_old_index_is_rejected_without_migration(tmp_path):
@@ -82,14 +84,12 @@ def test_old_index_is_rejected_without_migration(tmp_path):
         kb = client.app.state.db.knowledge
         async def make_obsolete():
             async with kb.db.sessions.begin() as session:
-                for snapshot in await session.scalars(select(DocumentParse)):
-                    payload = deepcopy(snapshot.payload)
-                    payload['version'] = 'discarded-test-index'
-                    snapshot.payload = payload
+                for index in await session.scalars(select(DocumentIndex)):
+                    index.version = 'discarded-test-index'
         client.portal.call(make_obsolete)
         with pytest.raises(ValueError, match='旧索引'):
             client.portal.call(kb.check_index)
         async def inspect():
             async with kb.db.sessions() as session:
-                return [p.payload['version'] for p in await session.scalars(select(DocumentParse))]
+                return list(await session.scalars(select(DocumentIndex.version)))
         assert set(client.portal.call(inspect)) == {'discarded-test-index'}

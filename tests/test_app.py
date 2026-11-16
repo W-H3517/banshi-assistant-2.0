@@ -15,7 +15,7 @@ from backend.app import create_app
 from backend.chat import ChatService, owned
 from backend.config import Settings
 from backend.db import Chunk, Conversation, Database, SeedImport, User
-from tests_stage2.pdf_helpers import make_pdf
+from tests.pdf_helpers import make_pdf
 
 
 def login(client, username="admin"):
