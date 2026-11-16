@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref } from 'vue'
-import { ChatDotRound, Collection, Document as DocumentIcon, Plus, Search, Upload, ArrowRight, SwitchButton, Close, Menu } from '@element-plus/icons-vue'
+import { ChatDotRound, Collection, Document as DocumentIcon, Plus, Search, Upload, ArrowRight, SwitchButton, Menu, EditPen, Tickets, Finished } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, streamTurn, type User, type Conversation, type Document, type Message } from './api'
 import Markdown from './Markdown.vue'
+import ExperienceForm from './ExperienceForm.vue'
+import ExperienceMine from './ExperienceMine.vue'
+import ExperienceLibrary from './ExperienceLibrary.vue'
+import ExperienceAdmin from './ExperienceAdmin.vue'
 const ChunkPreview = defineAsyncComponent(() => import('./ChunkPreview.vue'))
 
 const user = ref<User | null>(null)
@@ -12,7 +16,14 @@ const username = ref('admin')
 const password = ref('')
 const signingIn = ref(false)
 const loginError = ref('')
-const page = ref<'chat' | 'knowledge'>('chat')
+type Page = 'chat' | 'knowledge' | 'record' | 'mine' | 'workbench'
+const page = ref<Page>('chat')
+const pageTitle: Record<Page, [string, string]> = {
+  chat: ['办事助手', '让办理有据可循'], knowledge: ['知识库', '部门共享资料'], record: ['记录经验', '把办事的经验留给同事'],
+  mine: ['我的记录', '我提交的经验'], workbench: ['管理工作台', '审核与发布经验'],
+}
+const libraryTab = ref<'documents' | 'experiences'>('documents')
+const experienceTags = ref<string[]>([])
 const conversations = ref<Conversation[]>([])
 const current = ref<Conversation | null>(null)
 const documents = ref<Document[]>([])
@@ -47,8 +58,12 @@ async function loadDocuments() {
   availableDocumentIds.value = all.map(doc => doc.id)
   documents.value = search.value.trim() ? await api<Document[]>('/documents?q=' + encodeURIComponent(search.value)) : all
 }
+async function loadExperienceTags() {
+  experienceTags.value = (await api<{ tags: string[] }>('/experiences')).tags
+}
+function go(target: Page) { page.value = target; mobileOpen.value = false }
 async function initialize() {
-  await Promise.all([listConversations(), loadDocuments()])
+  await Promise.all([listConversations(), loadDocuments(), loadExperienceTags()])
   const health = await api<{ model_configured: boolean }>('/health')
   modelReady.value = health.model_configured
 }
@@ -62,6 +77,7 @@ async function login() {
 }
 function clearSession() {
   user.value = null; current.value = null; conversations.value = []; documents.value = []
+  page.value = 'chat'; libraryTab.value = 'documents'; experienceTags.value = []
   inspectionDocument.value = null
   availableDocumentIds.value = []
   selectedDocument.value = null; documentOpen.value = false; draft.value = ''; answerValues.value = {}
@@ -212,13 +228,13 @@ onUnmounted(() => window.removeEventListener('session-expired', clearSession))
     <aside class="sidebar" :class="{ 'mobile-open': mobileOpen }">
       <div class="brand"><div class="brand-mark">办</div><div>办事助手<small>部门工作空间</small></div></div>
       <el-button class="new-chat" :icon="Plus" :disabled="sending" @click="newChat">开启新对话</el-button>
-      <nav aria-label="主导航"><button :class="{ active: page === 'chat' }" @click="page = 'chat'; mobileOpen = false"><el-icon><ChatDotRound /></el-icon>办事助手</button><button :class="{ active: page === 'knowledge' }" @click="page = 'knowledge'; mobileOpen = false; guard(loadDocuments)"><el-icon><Collection /></el-icon>制度知识库<span>{{ documents.length }}</span></button></nav>
+      <nav aria-label="主导航"><button :class="{ active: page === 'chat' }" @click="go('chat')"><el-icon><ChatDotRound /></el-icon>办事助手</button><button :class="{ active: page === 'knowledge' }" @click="go('knowledge'); guard(loadDocuments)"><el-icon><Collection /></el-icon>知识库<span>{{ documents.length }}</span></button><button :class="{ active: page === 'record' }" @click="go('record')"><el-icon><EditPen /></el-icon>记录经验</button><button :class="{ active: page === 'mine' }" @click="go('mine')"><el-icon><Tickets /></el-icon>我的记录</button><button v-if="user.role === 'admin'" :class="{ active: page === 'workbench' }" @click="go('workbench')"><el-icon><Finished /></el-icon>管理工作台</button></nav>
       <div class="history-label">我的对话 <span>仅自己可见</span></div>
       <div class="history-list"><p v-if="!conversations.length" class="empty-history">从第一个问题开始</p><button v-for="c in conversations" :key="c.id" :disabled="sending" :class="{ selected: current?.id === c.id }" @click="guard(() => openConversation(c.id))"><span>{{ c.title }}</span><i v-if="c.status === 'waiting'"></i></button></div>
       <div class="user-bar"><div class="avatar">{{ user.name.slice(-1) }}</div><div><strong>{{ user.name }}</strong><small>{{ user.role === 'admin' ? '管理员' : '普通员工' }}</small></div><el-button text :icon="SwitchButton" aria-label="退出登录" @click="guard(logout)" /></div>
     </aside>
     <main class="main-panel">
-      <header class="topbar"><div><button class="mobile-menu" aria-label="打开菜单" @click="mobileOpen = true"><el-icon><Menu /></el-icon></button><span>{{ page === 'chat' ? '办事助手' : '制度知识库' }}</span><span class="header-divider">/</span><span class="muted">{{ page === 'chat' ? '让办理有据可循' : '部门共享资料' }}</span></div><span class="workspace-badge"><i></i>内部试用</span></header>
+      <header class="topbar"><div><button class="mobile-menu" aria-label="打开菜单" @click="mobileOpen = true"><el-icon><Menu /></el-icon></button><span>{{ pageTitle[page][0] }}</span><span class="header-divider">/</span><span class="muted">{{ pageTitle[page][1] }}</span></div><span class="workspace-badge"><i></i>内部试用</span></header>
       <section v-if="page === 'chat'" class="chat-page">
         <div v-if="!modelReady" class="model-notice">模型密钥尚未配置，暂不能对话。制度知识库可正常使用。</div>
         <div ref="scrollArea" class="chat-scroll">
@@ -241,10 +257,17 @@ onUnmounted(() => window.removeEventListener('session-expired', clearSession))
         </div>
         <div class="composer-area"><div v-if="busy" class="generation-status"><span>正在处理你的问题…</span><el-button size="small" @click="guard(stop)">停止生成</el-button></div><div v-else-if="current && statusLabel[current.status]" class="generation-status"><span>{{ statusLabel[current.status] }}</span></div><div class="composer" :class="{ disabled: busy || Boolean(current?.pending.length) }"><textarea v-model="draft" aria-label="输入办事问题" :disabled="busy || Boolean(current?.pending.length) || !modelReady" :placeholder="current?.pending.length ? '请先回答上方问题' : '输入你想了解的事项…'" rows="2" maxlength="12000" @keydown="composerKey"></textarea><div class="composer-bottom"><span>基于制度回答 · 支持继续追问</span><el-button type="primary" :disabled="!draft.trim() || busy || Boolean(current?.pending.length) || !modelReady" :icon="ArrowRight" aria-label="发送消息" @click="send()" /></div></div><p class="composer-note">回答仅供参考，请以现行制度原文为准。</p></div>
       </section>
-      <section v-else class="knowledge-page"><div class="page-heading"><div><p class="eyebrow">KNOWLEDGE BASE</p><h1>制度知识库</h1><p class="muted">查找制度、查看原文，让每一步都有依据。</p></div><div v-if="user.role === 'admin'" class="knowledge-admin-actions"><el-button type="danger" plain :loading="resetting" :disabled="uploading || deleting !== null" @click="resetDemo">重置测试数据</el-button><el-button :disabled="resetting" type="primary" :icon="Upload" :loading="uploading" @click="fileInput?.click()">{{ uploading ? '正在解析并建立索引…' : '上传 PDF' }}</el-button></div><input ref="fileInput" type="file" accept=".pdf,application/pdf" hidden @change="upload" /></div>
+      <section v-else-if="page === 'record'" class="knowledge-page"><div class="page-heading"><div><p class="eyebrow">SHARE</p><h1>记录经验</h1><p class="muted">办事时踩过的坑、摸索出的做法，随手记下来；一句话也可以，之后还能在“我的记录”里补充草稿。</p></div></div><ExperienceForm :tag-options="experienceTags" @saved="go('mine')" /></section>
+      <ExperienceMine v-else-if="page === 'mine'" :tag-options="experienceTags" @record="go('record')" />
+      <ExperienceAdmin v-else-if="page === 'workbench' && user.role === 'admin'" :tag-options="experienceTags" @changed="guard(loadExperienceTags)" />
+      <section v-else class="knowledge-page"><div class="page-heading"><div><p class="eyebrow">KNOWLEDGE BASE</p><h1>知识库</h1><p class="muted">制度是正式规定，经验是同事的实际做法；两者分开存放。</p></div><div v-if="user.role === 'admin' && libraryTab === 'documents'" class="knowledge-admin-actions"><el-button type="danger" plain :loading="resetting" :disabled="uploading || deleting !== null" @click="resetDemo">重置测试数据</el-button><el-button :disabled="resetting" type="primary" :icon="Upload" :loading="uploading" @click="fileInput?.click()">{{ uploading ? '正在解析并建立索引…' : '上传 PDF' }}</el-button></div><input ref="fileInput" type="file" accept=".pdf,application/pdf" hidden @change="upload" /></div>
+        <div class="library-tabs" role="tablist"><button role="tab" :aria-selected="libraryTab === 'documents'" :class="{ active: libraryTab === 'documents' }" @click="libraryTab = 'documents'">制度</button><button role="tab" :aria-selected="libraryTab === 'experiences'" :class="{ active: libraryTab === 'experiences' }" @click="libraryTab = 'experiences'">经验</button></div>
+        <ExperienceLibrary v-if="libraryTab === 'experiences'" @tags="experienceTags = $event" />
+        <template v-else>
         <div class="knowledge-toolbar"><el-input v-model="search" placeholder="输入问题或关键词搜索制度" maxlength="300" :prefix-icon="Search" clearable @keyup.enter="guard(loadDocuments)" @clear="guard(loadDocuments)" /><el-button @click="guard(loadDocuments)">搜索</el-button><span>{{ documents.length }} 份制度</span></div>
         <div v-if="documents.length" class="document-grid"><article v-for="doc in documents" :key="doc.id" class="document-entry"><button class="document-card" @click="openDocument(doc.id, doc.match_page)"><div class="document-card-top"><span class="file-icon"><el-icon><DocumentIcon /></el-icon></span><span class="file-type">PDF · {{ doc.page_count }} 页</span></div><h3>{{ doc.title }}</h3><p>{{ doc.preview }}</p><div class="document-card-footer"><span>{{ doc.filename }}</span><span>查看原文 ↗</span></div></button><div v-if="user.role === 'admin'" class="document-actions"><el-button size="small" :disabled="resetting || deleting !== null" @click="inspectionDocument = doc">切分预览</el-button><el-button type="danger" plain size="small" :loading="deleting === doc.id" :disabled="deleting !== null || resetting" :aria-label="`删除${doc.title}`" @click="deleteDocument(doc)">删除制度</el-button></div></article></div><el-empty v-else description="没有找到匹配的制度，试试其他关键词" />
         <p class="knowledge-note">{{ user.role === 'admin' ? '支持文字及扫描 PDF，单份不超过 20 MB、200 页；扫描页会在本机识别，耗时较长，完成后即可查询。暂不支持加密文件。' : '制度由管理员维护，所有登录成员均可查询。' }}</p>
+        </template>
       </section>
     </main>
     <ChunkPreview v-if="inspectionDocument && user.role === 'admin'" :document="inspectionDocument" @close="inspectionDocument = null" />

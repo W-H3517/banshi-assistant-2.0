@@ -19,6 +19,7 @@ from .auth import COOKIE, current_user, digest, public_user
 from .chat import ChatService, detail, owned
 from .config import ROOT, Settings
 from .db import Conversation, Database, Document, Login, User, check_password
+from .experiences import router as experience_router
 from .knowledge import DuplicateDocument, KnowledgeBase, public_document
 from .logging_setup import LoggingRuntime
 from .parsing import MAX_FILE_BYTES, InvalidPDF
@@ -220,6 +221,8 @@ def create_app(settings=None, *, agent_factory=create_agent):
         await owned(app.state.db, conversation_id, user.id)
         await app.state.chat.stop(conversation_id)
         return {"ok": True}
+
+    app.include_router(experience_router)
 
     frontend = ROOT / "frontend/dist"
     if frontend.exists():

@@ -100,6 +100,38 @@ class Chunk(Base):
     detail: Mapped[dict] = mapped_column(JSON, deferred=True)
 
 
+class Experience(Base):
+    """员工经验。original 是提交人的原文，content 是管理员审核调整后对外发布的内容。"""
+
+    __tablename__ = "experiences"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    author_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    status: Mapped[str] = mapped_column(default="draft", index=True)
+    tags: Mapped[list] = mapped_column(JSON)
+    original: Mapped[str] = mapped_column(Text)
+    content: Mapped[str] = mapped_column(Text, default="")
+    conflict: Mapped[bool] = mapped_column(default=False)
+    conflict_note: Mapped[str] = mapped_column(default="")
+    admin_note: Mapped[str] = mapped_column(default="")
+    created_at: Mapped[str] = mapped_column(default=now)
+    updated_at: Mapped[str] = mapped_column(default=now)
+    submitted_at: Mapped[str | None]
+    published_at: Mapped[str | None]
+
+
+class ExperienceEvent(Base):
+    """经验的操作记录：提交、核实、调整、发布、不发布、下架各一条，保留当时的内容用于追溯。"""
+
+    __tablename__ = "experience_events"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    experience_id: Mapped[str] = mapped_column(ForeignKey("experiences.id"), index=True)
+    actor_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    action: Mapped[str]
+    note: Mapped[str] = mapped_column(default="")
+    content: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[str] = mapped_column(default=now)
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)

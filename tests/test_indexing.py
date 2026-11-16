@@ -99,7 +99,8 @@ def test_preview_permissions_and_no_index_mutations(tmp_path):
         assert "active_for_search" not in result
         assert result["pages"] and result["chunks"]
         assert "current_chunks" not in result and "markdown" not in result
-        paths = {route.path for route in client.app.routes}
+        # 经验接口以子路由方式挂载，子路由对象本身没有 path。
+        paths = {route.path for route in client.app.routes if hasattr(route, "path")}
         assert "/api/documents/{document_id}/conversion-preview" not in paths
         assert "/api/documents/{document_id}/reference-preview" not in paths
         original = client.get(f"/api/documents/{document['id']}/file").content

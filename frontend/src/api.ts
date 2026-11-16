@@ -6,12 +6,19 @@ export interface Question { id: string; question: string; options?: string[] | n
 export interface Conversation { id: string; title: string; status: string; updated_at: string; transcript: Message[]; pending: Question[]; error: string }
 export interface Document extends Source { filename: string; preview: string; created_at: string; page_count: number; chunk_count: number; match_page?: number }
 
+/** 后端的错误说明：普通错误是一句话，字段校验错误是列表，取第一条的提示。 */
+function detailText(detail: unknown) {
+  if (typeof detail === 'string') return detail
+  const first = Array.isArray(detail) ? detail[0]?.msg : ''
+  return typeof first === 'string' ? first.replace(/^Value error, /, '') : ''
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch('/api' + path, { ...init, headers: init.body instanceof FormData ? init.headers : { 'Content-Type': 'application/json', ...init.headers } })
   if (!response.ok) {
     const error = await response.json().catch(() => ({}))
     if (response.status === 401) window.dispatchEvent(new Event('session-expired'))
-    throw new Error(typeof error.detail === 'string' ? error.detail : `请求失败（${response.status}）`)
+    throw new Error(detailText(error.detail) || `请求失败（${response.status}）`)
   }
   return response.json()
 }
