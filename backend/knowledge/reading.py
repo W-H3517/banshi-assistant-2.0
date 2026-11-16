@@ -172,7 +172,7 @@ class Reading:
                     "unit_id": part["unit_id"], "boundary_status": part["boundary_status"],
                     "boundary_reasons": part["boundary_reasons"], "table": part["table"],
                     "header_pages": part["header_pages"],
-                    "warnings": outline.meta["warnings"] + part["warnings"]}
+                    "warnings": outline.warnings(pages) + part["warnings"]}
             # 给外层页码、游标和边界说明留预算；几何信息默认不进入模型上下文。
             if len(json.dumps(items + [item], ensure_ascii=False)) > READ_RESPONSE_BUDGET - 5000:
                 if items:

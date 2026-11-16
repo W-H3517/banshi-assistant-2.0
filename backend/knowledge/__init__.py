@@ -19,6 +19,7 @@ class KnowledgeBase(Library, Search, Reading):
         self.embeddings = embeddings
         self.ocr = ocr
         self.upload_lock = asyncio.Lock()
+        self.term_cache = {}  # 片段 ID → 分词结果；片段内容不变，资料删除或重置时清空
 
     @classmethod
     async def create(cls, db, settings):

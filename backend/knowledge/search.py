@@ -27,6 +27,35 @@ def terms(text):
             if word not in STOP_WORDS and re.search(r"\w", word) and len(word) > 1]
 
 
+def fingerprint(text):
+    """忽略空白与标点的内容指纹，用于识别不同文件里转载的同一段内容。"""
+    return re.sub(r"[\W_]+", "", text).casefold()
+
+
+def compact(hit, multiple):
+    """交给模型的命中条目：只保留定位、引用和正文，默认状态不输出。"""
+    item = {"id": hit["id"], "node_id": hit["node_id"], "pages": hit["pages"],
+            "citation": hit["citation"]}
+    if path := " / ".join(filter(None, (hit["source"]["chapter"], hit["source"]["article"]))):
+        item["path"] = path
+    if hit["article_id"] and hit["article_id"] != hit["node_id"]:
+        item["article_id"] = hit["article_id"]
+    if hit["kind"] == "table_row":
+        item["kind"] = "table_row"
+    elif not hit["excerpt_complete"]:
+        item["partial"] = True  # 只是所属段落的一部分，可按 node_id 补读
+    if hit["boundary_status"] != "confirmed":
+        item["boundary_uncertain"] = hit["boundary_reasons"]
+    if hit["warnings"]:
+        item["warnings"] = hit["warnings"]
+    if hit["also_in"]:
+        item["also_in"] = hit["also_in"]
+    if multiple:
+        item["matched_queries"] = hit["matched_queries"]
+    item["content"] = hit["content"]
+    return item
+
+
 def match_reference(name, library):
     """按名称匹配被引用的文件，允许省略“（修订）”后缀；不推断版本效力。"""
     wanted = normalize_label(name)
@@ -63,18 +92,34 @@ class Search:
         if not rows:
             return []
         ranked = await asyncio.to_thread(self.rank, query, rows)
-        groups = {}
+        groups, owners, repeats = {}, {}, {}
         for index in ranked:
             row = rows[index]
             if row.node_id in groups:
                 groups[row.node_id].append(row)
+                continue
+            if row.node_id in repeats:
+                continue
+            # 内容相同的阅读单元（如两份文件收录同一张表）并入先命中的一条，只占一个名额。
+            owner = owners.get(mark := fingerprint(row.content))
+            if owner:
+                repeats[row.node_id] = (owner, row)
             elif len(groups) < MAX_RESULTS:
                 groups[row.node_id] = [row]
+                owners[mark] = row.node_id
         # 只为最终命中读取片段明细和所属文档的结构。
+        shown = [group[0] for group in groups.values()] + [row for _, row in repeats.values()]
         async with self.db.sessions() as session:
             details = dict((await session.execute(select(Chunk.id, Chunk.detail).where(
-                Chunk.id.in_([group[0].id for group in groups.values()])))).all())
-        outlines = await load_outlines(self.db, {group[0].document_id for group in groups.values()})
+                Chunk.id.in_([row.id for row in shown])))).all())
+        outlines = await load_outlines(self.db, {row.document_id for row in shown})
+        also = {}
+        for owner, row in repeats.values():
+            pages = details[row.id]["pages"]
+            also.setdefault(owner, []).append({
+                "id": row.document_id, "title": outlines[row.document_id].title,
+                "node_id": row.node_id, "pages": pages,
+                "citation": outlines[row.document_id].citation(pages[0])})
         hits = []
         for group in groups.values():
             first = group[0]
@@ -83,6 +128,7 @@ class Search:
             article = outline.article(node)
             whole = detail["start"] == 0 and detail["end"] == node["length"]
             hits.append({
+                "also_in": also.get(first.node_id, []),
                 "id": first.document_id, "title": outline.title, "chunk_id": first.id,
                 "node_id": node["id"], "article_id": article["id"] if article else None,
                 "matched_chunk_ids": [row.id for row in group], "page": detail["pages"][0],
@@ -92,12 +138,15 @@ class Search:
                 "boundary_status": node["boundary_status"],
                 "boundary_reasons": node["boundary_reasons"],
                 "citation": outline.citation(detail["pages"][0]),
-                "warnings": outline.meta["warnings"] + detail["warnings"]})
+                "warnings": outline.warnings(detail["pages"]) + detail["warnings"]})
         logger.info("正文检索 candidates=%d groups=%d", len(rows), len(hits))
         return hits
 
     def rank(self, query, rows):
-        corpus = [terms(row.content) for row in rows]
+        for row in rows:
+            if row.id not in self.term_cache:
+                self.term_cache[row.id] = terms(row.content)
+        corpus = [self.term_cache[row.id] for row in rows]
         query_terms = terms(query)
         lexical = BM25Okapi(corpus).get_scores(query_terms) if any(corpus) else np.zeros(len(rows))
         query_vector = self.embeddings.query(query)
@@ -124,40 +173,55 @@ class Search:
         return sorted(candidates,
                       key=lambda i: (-scores[rows[i].node_id], -float(similarities[i]), i))
 
-    async def search_bundle(self, query, document_id=None, node_id=None):
-        queries = [query] if isinstance(query, str) else query
-        if not isinstance(queries, list) or not 1 <= len(queries) <= 4 or (
-                isinstance(query, list) and len(query) < 2):
-            raise ValueError("搜索须为单个字符串或2至4个子查询")
+    async def search_bundle(self, queries, document_id=None, node_id=None, sent_cards=None):
+        """Agent 用的检索：1 至 4 个查询轮流合并，返回精简条目和尚未提供过的规则卡。
+
+        sent_cards 是本次对话已提供过规则卡的文件 ID 集合，会就地补入本次新提供的文件。
+        """
+        if not isinstance(queries, list) or not 1 <= len(queries) <= 4:
+            raise ValueError("搜索须提供1至4个查询")
         if any(not isinstance(q, str) or not q.strip() or len(q) > 300 for q in queries):
             raise ValueError("每个查询须为1至300字")
         queries = [q.strip() for q in queries]
         if len(set(queries)) != len(queries):
-            raise ValueError("子查询不能重复")
+            raise ValueError("查询不能重复")
         groups = [await self.search(q, document_id, node_id) for q in queries]
-        selected = {}
+        selected, marks = {}, {}
         limit = MAX_RESULTS * len(queries)
-        # 轮流取每个子查询候选，避免一个子问题挤掉其他子问题。
+        # 轮流取每个查询的候选，避免一个子问题挤掉其他子问题；内容相同的只保留先取到的一条。
         for rank in range(MAX_RESULTS):
             for hits in groups:
                 if rank < len(hits) and len(selected) < limit:
                     hit = hits[rank]
-                    selected.setdefault(hit["node_id"], dict(hit))
+                    if marks.setdefault(fingerprint(hit["content"]), hit["node_id"]) == hit["node_id"]:
+                        selected.setdefault(hit["node_id"], dict(hit))
         for key, item in selected.items():
             item["matched_queries"] = [i for i, hits in enumerate(groups)
                                        if any(h["node_id"] == key for h in hits)]
-        return {"items": list(selected.values()),
-                "rule_cards": await self.rule_cards(dict.fromkeys(
-                    (hit["id"], hit["title"]) for hit in selected.values())),
-                "queries": queries,
-                "query_results": [{"query": q, "returned": sum(i in h["matched_queries"]
-                                                               for h in selected.values())}
-                                  for i, q in enumerate(queries)],
-                "note": "命中数不表示依据齐全；规则卡为原文摘录，不保证自动识别所有效力关系。金额仍需核对适用范围与计算规则。"}
+        hits = list(selected.values())
+        documents = {hit["id"]: hit["title"] for hit in hits}
+        sent_cards = set() if sent_cards is None else sent_cards
+        fresh = {key: title for key, title in documents.items() if key not in sent_cards}
+        sent_cards.update(fresh)
+        result = {
+            "documents": documents | {other["id"]: other["title"]
+                                      for hit in hits for other in hit["also_in"]},
+            "items": [compact(hit, len(queries) > 1) for hit in hits],
+            "rule_cards": await self.rule_cards(fresh),
+            "queries": queries,
+            "query_results": [{"query": q, "returned": sum(i in h["matched_queries"] for h in hits)}
+                              for i, q in enumerate(queries)],
+            "note": "命中数不表示依据齐全；规则卡为原文摘录，不保证自动识别所有效力关系。金额仍需核对适用范围与计算规则。"}
+        if len(fresh) < len(documents):
+            result["rule_cards_sent_before"] = [title for key, title in documents.items()
+                                                if key not in fresh]
+        return result
 
     async def rule_cards(self, documents):
         """命中文件各附一张规则卡；外部文件指向按名称在全库中匹配。"""
-        ids = [document_id for document_id, _ in documents]
+        if not documents:
+            return []
+        ids = list(documents)
         async with self.db.sessions() as session:
             library = (await session.execute(
                 select(Document.id, Document.title, Document.filename))).all()
@@ -170,4 +234,4 @@ class Search:
                             "references": [match_reference(name, library)
                                            for name in rule["references"]]}
                            for rule in cards[key]["rules"]]}
-                for key, title in documents]
+                for key, title in documents.items()]

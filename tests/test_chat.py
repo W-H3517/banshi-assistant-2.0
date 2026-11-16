@@ -361,7 +361,7 @@ async def test_search_question_resume_search_remain_reserved(chat):
     def handler(request):
         requests.append(json.loads(request.content))
         if len(requests) in {1, 3}:
-            return tool("search_documents", {"query": "培训"}, f"search{len(requests)}")
+            return tool("search_documents", {"queries": ["培训"]}, f"search{len(requests)}")
         if len(requests) == 2:
             return tool("ask_question", {"question": "是否外地？"}, "ask1")
         return sse({"role": "assistant", "content": "完成"})

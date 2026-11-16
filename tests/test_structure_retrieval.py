@@ -167,7 +167,7 @@ def test_agent_locate_read_search_and_sources(tmp_path):
             return tool("read_document_content", {"target_id": previous["items"][0]["node_id"]}, "read1")
         if len(requests) == 3:
             assert previous["pagination_complete"] and any("450" in i["content"] for i in previous["items"])
-            return tool("search_documents", {"query": "酒店预算上限"}, "search1")
+            return tool("search_documents", {"queries": ["酒店预算上限"]}, "search1")
         assert any("450" in i["content"] for i in previous["items"])
         assert "rule_cards" in previous
         return sse({"role": "assistant", "content": "模拟标准为450元。"})
@@ -199,7 +199,7 @@ def test_search_rule_card_page_is_added_to_chat_sources(tmp_path):
         body = json.loads(request.content)
         requests.append(body)
         if len(requests) == 1:
-            return tool("search_documents", {"query": ["公务平台预订机票", "商业代理预订机票"]}, "search-rules")
+            return tool("search_documents", {"queries": ["公务平台预订机票", "商业代理预订机票"]}, "search-rules")
         result = json.loads(body["messages"][-1]["content"])
         assert result["items"]
         assert any("以本通知为准" in r["content"] for c in result["rule_cards"] for r in c["rules"])
@@ -228,7 +228,7 @@ def test_search_rule_card_page_is_added_to_chat_sources(tmp_path):
             client.portal.call(transport.aclose)
 
 
-@pytest.mark.parametrize("arguments", ['{"query": ["差旅补助"]}', '{"query": 差旅补助}'])
+@pytest.mark.parametrize("arguments", ['{"queries": []}', '{"queries": [差旅补助]}'])
 def test_invalid_search_arguments_retry_without_becoming_sources(tmp_path, arguments):
     requests, clients = [], []
 
@@ -236,15 +236,17 @@ def test_invalid_search_arguments_retry_without_becoming_sources(tmp_path, argum
         body = json.loads(request.content)
         requests.append(body)
         if len(requests) == 1:
-            query = body["tools"][0]["function"]["parameters"]["properties"]["query"]
-            assert query["description"] and query["anyOf"][1]["minItems"] == 2
+            # 查询只有数组一种写法，不让模型在字符串和数组之间选择。
+            query = body["tools"][0]["function"]["parameters"]["properties"]["queries"]
+            assert query["description"] and query["type"] == "array" and "anyOf" not in query
+            assert (query["minItems"], query["maxItems"]) == (1, 4)
             return sse({"role": "assistant", "tool_calls": [{"index": 0, "id": "invalid-search",
                         "type": "function", "function": {"name": "search_documents",
                                                            "arguments": arguments}}]}, "tool_calls")
         if len(requests) == 2:
             feedback = body["messages"][-1]["content"].lower()
-            assert "validation" in feedback or "json_invalid" in feedback
-            return tool("search_documents", {"query": "差旅补助"}, "corrected-search")
+            assert "too_short" in feedback or "json_invalid" in feedback
+            return tool("search_documents", {"queries": ["差旅补助"]}, "corrected-search")
         assert "items" in json.loads(body["messages"][-1]["content"])
         return sse({"role": "assistant", "content": "参数纠正后检索完成。"})
 

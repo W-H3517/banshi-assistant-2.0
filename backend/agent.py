@@ -1,22 +1,26 @@
 from typing import Annotated, Literal
 
-from pydantic import Field
-from pydantic_ai import Agent, CallDeferred, DeferredToolRequests, ModelRetry
+from pydantic import BeforeValidator, Field
+from pydantic_ai import Agent, CallDeferred, DeferredToolRequests, ModelRetry, RunContext
+from pydantic_ai.messages import ToolReturnPart
 
 from .config import Settings
 from .db import Database
 from .models import create_model, model_settings
 
 SearchText = Annotated[str, Field(min_length=1, max_length=300)]
-SearchQueries = Annotated[list[SearchText], Field(min_length=2, max_length=4)]
+# 对模型只声明数组一种写法；模型仍写成单个字符串时按单元素数组接受，不为此浪费一次重试。
+SearchQueries = Annotated[list[SearchText], Field(min_length=1, max_length=4),
+                          BeforeValidator(lambda value: [value] if isinstance(value, str) else value)]
 
 INSTRUCTIONS = """你是部门办事助手。根据用户问题自主决定直接回答、问问题或查资料。
 有四个工具：ask_question（问问题）、search_documents（搜索正文）、
 locate_document_structure（定位文件和结构）、read_document_content（读取内容）。不必每次调用工具。
-单查询最多六组命中；多事项先拆成2至4个子查询，例如限额与报销方式、伙食与交通分别查询。
-每个子查询最多六组，多查询轮流合并去重、最多24组；不要把参考答案或臆测金额写入查询。
-搜索items不是整条依据；文件名、章节、条号不拼入正文检索。
-搜索自动附带命中文件的rule_cards，每份文件一次；回答前检查其适用范围、效力和外部文件指向。
+搜索的queries始终是数组，放1至4个查询；多事项拆成多个查询，例如限额与报销方式、伙食与交通分别查询。
+每个查询最多六组命中，多个查询轮流合并去重；不要把参考答案或臆测金额写入查询。
+搜索items不是整条依据；文件名、章节、条号不拼入正文检索。items的id对应documents中的文件标题。
+items带also_in时表示其他文件收录了相同内容，引用时任选其一并可说明另见；带partial时只是段落的一部分。
+每份文件的rule_cards在一次对话中只附带一次，rule_cards_sent_before列出前文已提供的文件；回答前检查其适用范围、效力和外部文件指向。
 引用的外部办法未匹配时不能套用国内或其他文件金额；规则卡也不能替代对冲突条件的判断。
 明确文件名、章节或条号时，先用定位工具找到节点，再读取或限定范围搜索。
 定位 query 留空可列出文件；传 parent_id 且 query 留空可逐层查看目录。
@@ -44,29 +48,41 @@ citation 是工具结果中的链接值，须原样作为链接地址，例如 [
 """
 
 
+def cards_in_history(messages):
+    """此前各轮搜索已附带过规则卡的文件 ID。"""
+    return {card["id"] for message in messages for part in message.parts
+            if isinstance(part, ToolReturnPart) and part.tool_name == "search_documents"
+            and isinstance(part.content, dict) for card in part.content.get("rule_cards", [])}
+
+
 def create_agent(settings: Settings, user_id: str, db: Database, *, model=None):
+    # 低价模型偶尔会写出不合法的工具参数；允许两次纠正，避免一轮内第二次出错就整轮失败。
     agent = Agent(
         model or create_model(settings),
         output_type=[str, DeferredToolRequests], instructions=INSTRUCTIONS,
-        model_settings=model_settings(settings, user_id),
+        model_settings=model_settings(settings, user_id), retries=2,
     )
+    sent_cards = set()  # 本次运行内已附带规则卡的文件；同一批并行搜索共用
 
-    @agent.tool_plain(strict=False)
+    @agent.tool(strict=False)
     async def search_documents(
-        query: SearchText | SearchQueries, document_id: str | None = None, node_id: str | None = None,
+        ctx: RunContext, queries: SearchQueries, document_id: str | None = None,
+        node_id: str | None = None,
     ) -> dict:
-        """单个问题或2至4个子查询混合检索；可限定文档或结构节点。
+        """按1至4个查询混合检索正文；可限定文档或结构节点。
 
-        每个query最多300字。返回items（命中片段）、rule_cards（每份命中文件的规则原文）；
-        同段多个子片段合为一组。查文件名/章节/条号应使用定位工具。
+        返回documents（文件id到标题）、items（命中片段）、rule_cards（命中文件的规则原文，
+        每份文件一次对话只附带一次）。同段多个子片段合为一组，内容相同的片段只列一条。
+        查文件名/章节/条号应使用定位工具。
 
         Args:
-            query: 单个业务问题，或2至4个不同的子问题；每个1至300字，不填臆测答案。
+            queries: 查询数组，1至4个互不相同的业务问题；只有一个问题也写成单元素数组。每个1至300字，不填臆测答案。
             document_id: 限定文件，使用先前结果的id字段；不填文件名或node_id，省略则搜索全库。
             node_id: 限定章节或条款子树，使用先前结果的node_id；与document_id同时填写时须属于该文件。
         """
+        sent_cards.update(cards_in_history(ctx.messages))
         try:
-            return await db.knowledge.search_bundle(query, document_id, node_id)
+            return await db.knowledge.search_bundle(queries, document_id, node_id, sent_cards)
         except ValueError as exc:
             raise ModelRetry(str(exc)) from None
 

@@ -169,7 +169,8 @@ class ChatService:
             async for event in stream:
                 text = None
                 if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
-                    text = event.part.content
+                    # 工具调用前的说明与之后的正式回答是两段文字，分段显示和保存。
+                    text = ("\n\n" if assistant["text"] else "") + event.part.content
                 elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
                     text = event.delta.content_delta
                 elif isinstance(event, FunctionToolCallEvent):
@@ -186,13 +187,17 @@ class ChatService:
                         "search_documents", "read_document_content",
                     }:
                         content = event.part.content
+                        titles = {}
                         if isinstance(content, dict):
+                            # 搜索条目的标题在 documents 中只列一次；阅读条目和规则自带标题。
+                            titles = content.get("documents", {})
                             content = content.get("items", []) + [rule for card in content.get("rule_cards", [])
                                                                   for rule in card["rules"]]
                         if isinstance(content, list):
                             for doc in content:
-                                for page in doc.get("pages", [doc["page"]]):
-                                    source = {"id": doc["id"], "title": doc["title"], "page": page}
+                                for page in doc.get("pages", [doc.get("page")]):
+                                    source = {"id": doc["id"], "page": page,
+                                              "title": doc.get("title") or titles[doc["id"]]}
                                     if source not in assistant["sources"]:
                                         assistant["sources"].append(source)
                                         queue.put_nowait({"type": "source", **source})

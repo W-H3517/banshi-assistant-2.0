@@ -194,11 +194,12 @@ def test_agent_tools_question_resume_and_failure(tmp_path, log_mode, capsys):
         if state["fail"]:
             return httpx2.Response(401, json={"error": {"message": "private-key-body"}})
         if len(requests) == 1:
-            return tool("search_documents", {"query": "培训"}, "search1")
+            # 模型把查询写成单个字符串时按单元素数组接受。
+            return tool("search_documents", {"queries": "培训"}, "search1")
         if len(requests) == 2:
             return tool("ask_question", {"question": "是否外地培训？", "options": ["是", "否"]}, "ask1")
         if len(requests) == 4:
-            return tool("search_documents", {"query": "外地培训报销材料"}, "search2")
+            return tool("search_documents", {"queries": ["外地培训报销材料"]}, "search2")
         return sse({"role": "assistant", "content": "请准备培训通知和发票。"})
 
     clients = []
@@ -228,7 +229,10 @@ def test_agent_tools_question_resume_and_failure(tmp_path, log_mode, capsys):
         tool_content = json.loads(requests[1]["messages"][-1]["content"])["items"]
         assert all("content" in doc and "preview" not in doc for doc in tool_content)
         assert any("450" in doc["content"] for doc in tool_content)
-        assert all(doc["page"] >= 1 and doc["citation"].endswith(f"#page={doc['page']}")
+        assert all(doc["pages"][0] >= 1 and doc["citation"].endswith(f"#page={doc['pages'][0]}")
+                   for doc in tool_content)
+        # 交给模型的条目只保留定位、引用和正文。
+        assert all("chunk_id" not in doc and "source" not in doc and "title" not in doc
                    for doc in tool_content)
         assert all(source["page"] >= 1 for source in paused["transcript"][-1]["sources"])
         assert client.post(path + "/turn", json={"answers": {"fake": "是"}}).status_code == 422

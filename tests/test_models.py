@@ -41,7 +41,7 @@ async def test_openai_tool_roundtrip_has_no_deepseek_parameters(api, tool_name):
     requests = []
     calls = []
 
-    async def search(query, document_id, node_id):
+    async def search(query, document_id, node_id, sent_cards):
         calls.append(query)
         return {"items": [], "rule_cards": [], "queries": query}
 
@@ -55,7 +55,7 @@ async def test_openai_tool_roundtrip_has_no_deepseek_parameters(api, tool_name):
         assert {t["name"] for t in schemas} == {
             "search_documents", "locate_document_structure", "read_document_content", "ask_question"}
         assert all(t.get("strict", False) is False for t in schemas)
-        arguments = {"query": ["住宿限额", "凭据报销"]} if tool_name == "search_documents" else {"question": "是否已获审批人同意？"}
+        arguments = {"queries": ["住宿限额", "凭据报销"]} if tool_name == "search_documents" else {"question": "是否已获审批人同意？"}
         if len(requests) == 2:
             returned = body["input"] if api == "responses" else body["messages"]
             assert "rule_cards" in json.dumps(returned)

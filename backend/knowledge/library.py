@@ -110,6 +110,7 @@ class Library:
                 DocumentIndex.document_id == document_id))
             await session.execute(delete(Document).where(Document.id == document_id))
             await session.commit()
+        self.term_cache.clear()
         return True
 
     async def reset_demo(self, user_id):
@@ -130,6 +131,7 @@ class Library:
                     await session.flush()
                     self.store_index(session, document, snapshot, vectors)
                     session.add(SeedImport(sha256=document.sha256))
+            self.term_cache.clear()
         return {"ok": True, "document_count": len(prepared)}
 
     async def documents(self, query=""):

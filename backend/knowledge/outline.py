@@ -44,6 +44,10 @@ class Outline:
         chain = [n for n in [node, *self.ancestors(node)] if n["kind"] == "article"]
         return next((n for n in chain if n["label"].startswith("第")), chain[0] if chain else None)
 
+    def warnings(self, pages):
+        """扫描识别提醒只属于来自扫描页的内容，不随文件扩散到文字页。"""
+        return self.meta["warnings"] if set(pages) & set(self.meta["ocr_pages"]) else []
+
     def citation(self, page):
         return f"/api/documents/{self.document_id}#page={page}"
 
