@@ -61,7 +61,7 @@ def build_chunks(structure, tables, pages, title, embeddings):
         if unit["kind"] in NOT_INDEXED or "caption_of" in unit:
             continue
         node = by_id[unit["node_id"]]
-        chapter, article = source_path(by_id, node)
+        chapter, article = source_path(by_id, node, unit.get("body_heading_id"))
         table, row = rows[unit["table_ref"]["table"], unit["table_ref"]["row"]] \
             if unit["kind"] == "table_row" else (None, None)
         parts = embeddings.split(row_retrieval_text(table, row) if row else unit["content"])

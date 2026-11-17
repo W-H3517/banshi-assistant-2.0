@@ -25,11 +25,11 @@ def test_native_context_is_embedded_and_titles_are_not_chunks():
     assert len(chunks) == 2
     assert chunks[0]['pages'] == [1, 2]
     assert chunks[0]['source'] == {'document_title': '报销办法', 'filename': '费用制度.pdf',
-                                  'chapter': '第一章总则', 'article': '第一条'}
+                                  'chapter': '第一章总则', 'article': ''}
     assert chunks[1]['source']['chapter'] == '第二章特殊规定'
-    assert chunks[1]['source']['article'] == '第二条'
-    for chunk in chunks:
-        assert chunk['content'].startswith(chunk['source']['article'])
+    assert chunks[1]['source']['article'] == ''
+    for chunk, label in zip(chunks, ('第一条', '第二条'), strict=True):
+        assert chunk['content'].startswith(label)
         assert '文件：' not in chunk['content']
         assert chunk['token_count'] == len(embeddings.tokenizer.encode(chunk['content']).ids)
         assert chunk['location_status'] == 'complete'
@@ -57,10 +57,12 @@ def test_ocr_heading_and_article_survive_page_break_without_extra_title_chunks()
     structure = build_structure(parsed['sections'], [], '出差通知', '通知原件.pdf')
     chunks = build_chunks(structure, [], pages, '出差通知', LocalEmbeddings(Settings().model_cache_dir))
     assert chunks[0]['source']['chapter'] == '一、规范出行'
-    assert chunks[0]['source']['article'] == '1.等级标准'
+    assert chunks[0]['source']['article'] == ''
+    assert chunks[0]['content'].startswith('1.等级标准')
     assert chunks[0]['pages'] == [1,2] and len(chunks[0]['regions']) == 3
     assert chunks[1]['source']['chapter'] == '二、报销手续'
-    assert chunks[1]['source']['article'] == '1.凭证要求'
+    assert chunks[1]['source']['article'] == ''
+    assert chunks[1]['content'].startswith('1.凭证要求')
     assert all(c['content'] not in ('出差通知', '一、规范出行', '二、报销手续') for c in chunks)
 
 
