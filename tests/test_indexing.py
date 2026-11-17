@@ -109,8 +109,14 @@ def test_preview_permissions_and_no_index_mutations(tmp_path):
         assert client.get(f"/api/conversations/{conversation['id']}").json() == conversation
         assert client.get("/api/documents/missing/chunk-preview").status_code == 404
         assert client.get(f"/api/documents/{document['id']}/file").content == original
+        # 普通员工也能看切分预览，但不含诊断信息。
         login(client, "alice")
-        assert client.get(path).status_code == 403
+        reader = client.get(path).json()
+        assert "version" not in reader and "removed_line_count" not in reader
+        assert [c["content"] for c in reader["chunks"]] == [c["content"] for c in result["chunks"]]
+        assert all({"node_id", "parent_id", "regions", "pages"} <= set(c) for c in reader["chunks"])
+        assert not {"token_count", "boundary_status", "location_status", "warnings"} & set(reader["chunks"][0])
+        assert all("token_count" in c and "parent_id" in c for c in result["chunks"])
         client.post("/api/logout")
         assert client.get(path).status_code == 401
 

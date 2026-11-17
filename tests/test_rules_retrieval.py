@@ -30,7 +30,7 @@ def test_effect_separated_signature_excluded_and_questions_locatable(tmp_path):
         rule = bundle['rule_cards'][0]['rules'][0]
         assert rule['content'].startswith('本通知') and rule['boundary_status'] == 'confirmed'
         assert '财务处' not in rule['content']
-        chunks = client.portal.call(kb.preview, doc['id'])['chunks']
+        chunks = client.portal.call(kb.preview, doc['id'], True)['chunks']
         assert not any('特此通知' in c['content'] for c in chunks)
         raw = client.portal.call(kb.read, rule['node_id'], 'page', 1, None, 1)
         assert any('财务处' in i['content'] for i in raw['items'])

@@ -1,0 +1,618 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>办事助手 · 蓝灰风格样稿</title>
+<style>
+/* ========== 设计变量（实现时迁入 frontend/src/styles/tokens.css） ========== */
+:root {
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --surface-2: #f8fafc;
+  --sidebar: #eef2f6;
+  --border: #e2e7ee;
+  --border-strong: #cdd5e0;
+  --text: #1f2a37;
+  --text-2: #4a5565;
+  --text-3: #7b8798;
+  --primary: #2f64d6;
+  --primary-hover: #2753b5;
+  --primary-soft: #eaf1fd;
+  --primary-line: #c4d6f7;
+  --doc: #2f64d6;          /* 制度 */
+  --doc-soft: #eaf1fd;
+  --exp: #b7701b;          /* 经验 */
+  --exp-soft: #fdf3e3;
+  --exp-line: #f0d5ab;
+  --success: #1e9e6a;
+  --warn: #c27c0e;
+  --warn-soft: #fff7e8;
+  --danger: #d14343;
+  --radius-s: 6px;
+  --radius: 8px;
+  --radius-l: 12px;
+  --shadow: 0 1px 2px rgba(31, 42, 55, .06), 0 4px 16px rgba(31, 42, 55, .06);
+  --fs-xs: 12px;
+  --fs-s: 13px;
+  --fs: 14px;
+  --fs-l: 16px;
+  --fs-xl: 20px;
+  --fs-2xl: 28px;
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  font-size: var(--fs);
+  color: var(--text);
+  background: var(--bg);
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+h1, h2, h3, p { margin: 0; }
+svg.i { width: 18px; height: 18px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.muted { color: var(--text-3); }
+
+/* ========== 样稿导航（不属于产品界面） ========== */
+.mock-bar { height: 44px; background: #111827; color: #cbd5e1; display: flex; align-items: center; gap: 6px; padding: 0 16px; font-size: var(--fs-s); }
+.mock-bar strong { color: #fff; margin-right: 12px; font-weight: 600; }
+.mock-bar button { border: 0; background: none; color: #cbd5e1; padding: 6px 12px; border-radius: 6px; }
+.mock-bar button.on { background: #374151; color: #fff; }
+.mock-bar .sep { flex: 1; }
+.mock-bar label { display: flex; align-items: center; gap: 6px; }
+.mock-bar .segmented button { color: #cbd5e1; }
+.mock-bar .segmented button.on { background: #fff; color: #111827; }
+.screen { display: none; height: calc(100vh - 44px); }
+.screen.on { display: flex; }
+
+/* ========== 通用控件 ========== */
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: var(--radius-s); border: 1px solid var(--border-strong); background: var(--surface); font-size: var(--fs-s); color: var(--text-2); white-space: nowrap; }
+.btn:hover { border-color: var(--primary); color: var(--primary); }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn.primary:hover { background: var(--primary-hover); }
+.btn.ghost { border-color: transparent; background: none; }
+.btn.danger { color: var(--danger); border-color: #f0c4c4; }
+.btn.small { height: 28px; padding: 0 10px; font-size: var(--fs-xs); }
+.input { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-s); background: var(--surface); color: var(--text-3); }
+.input input { border: 0; outline: 0; flex: 1; min-width: 0; background: none; color: var(--text); }
+.segmented { display: inline-flex; padding: 3px; background: #e9edf3; border-radius: 8px; }
+.segmented button { border: 0; background: none; padding: 5px 14px; border-radius: 6px; font-size: var(--fs-s); color: var(--text-2); }
+.segmented button.on { background: var(--surface); color: var(--primary); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.tag { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 4px; font-size: var(--fs-xs); white-space: nowrap; }
+.tag.doc { background: var(--doc-soft); color: var(--doc); }
+.tag.exp { background: var(--exp-soft); color: var(--exp); }
+.tag.gray { background: #eef1f5; color: var(--text-2); }
+.tag.warn { background: var(--warn-soft); color: var(--warn); }
+.tag.ok { background: #e7f6ef; color: var(--success); }
+
+/* ========== 登录页 ========== */
+.login { flex: 1; display: grid; grid-template-columns: minmax(420px, 46%) 1fr; }
+.login-side { background: linear-gradient(160deg, #1d3566 0%, #23458a 55%, #2f64d6 100%); color: #e6edf9; padding: 48px 56px; display: flex; flex-direction: column; position: relative; overflow: hidden; }
+.login-side::after { content: ""; position: absolute; inset: auto -120px -160px auto; width: 460px; height: 460px; border-radius: 50%; border: 1px solid rgba(255,255,255,.12); box-shadow: 0 0 0 70px rgba(255,255,255,.03), 0 0 0 140px rgba(255,255,255,.025); }
+.logo { display: flex; align-items: center; gap: 10px; font-size: var(--fs-l); font-weight: 600; }
+.logo-mark { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; background: var(--primary); color: #fff; font-size: 18px; font-weight: 700; }
+.login-side .logo-mark { background: rgba(255,255,255,.16); }
+.login-hero { margin: auto 0; position: relative; z-index: 1; }
+.login-hero h1 { font-size: 34px; font-weight: 600; line-height: 1.45; color: #fff; letter-spacing: 1px; }
+.login-hero > p { margin-top: 14px; font-size: var(--fs-l); color: #b9c8e6; line-height: 1.8; }
+.features { margin-top: 40px; display: grid; gap: 14px; max-width: 440px; }
+.feature { display: flex; gap: 14px; padding: 14px 16px; border-radius: var(--radius); background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.1); }
+.feature .ico { width: 36px; height: 36px; border-radius: 8px; background: rgba(255,255,255,.12); display: grid; place-items: center; color: #fff; }
+.feature strong { display: block; color: #fff; font-weight: 600; margin-bottom: 3px; }
+.feature span { font-size: var(--fs-s); color: #b9c8e6; }
+.login-side small { position: relative; z-index: 1; font-size: var(--fs-xs); color: #94a8d0; }
+.login-main { display: grid; place-items: center; padding: 40px; background: var(--surface); }
+.login-card { width: min(360px, 100%); }
+.login-card h2 { font-size: var(--fs-2xl); font-weight: 600; }
+.login-card > p { margin: 8px 0 32px; color: var(--text-3); }
+.field { margin-bottom: 20px; }
+.field label { display: block; font-size: var(--fs-s); color: var(--text-2); margin-bottom: 8px; }
+.field .input { height: 42px; }
+.login-card .btn.primary { width: 100%; height: 42px; justify-content: center; font-size: var(--fs); margin-top: 8px; }
+.login-tip { margin-top: 24px; padding: 12px 14px; border-radius: var(--radius); background: var(--surface-2); border: 1px dashed var(--border-strong); font-size: var(--fs-xs); color: var(--text-3); line-height: 1.8; }
+
+/* ========== 工作区外壳 ========== */
+.shell { flex: 1; display: flex; min-width: 0; }
+.sidebar { width: 236px; flex-shrink: 0; background: var(--sidebar); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 18px 12px 0; }
+.sidebar .logo { padding: 0 8px 18px; font-size: 15px; }
+.sidebar .logo small { display: block; font-size: var(--fs-xs); font-weight: 400; color: var(--text-3); }
+.new-chat { width: 100%; justify-content: center; height: 36px; }
+.nav { display: grid; gap: 2px; margin: 16px 0 18px; }
+.nav button { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border: 0; background: none; border-radius: var(--radius-s); color: var(--text-2); font-size: var(--fs); text-align: left; }
+.nav button:hover { background: #e3e9f0; }
+.nav button.on { background: var(--surface); color: var(--primary); font-weight: 600; box-shadow: 0 1px 2px rgba(31,42,55,.06); }
+.nav .count { margin-left: auto; font-size: var(--fs-xs); color: var(--text-3); font-weight: 400; }
+.nav .badge { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: #fff; font-size: 11px; display: grid; place-items: center; font-weight: 400; }
+.group-label { padding: 8px 10px 6px; font-size: var(--fs-xs); color: var(--text-3); display: flex; justify-content: space-between; }
+.history { flex: 1; overflow: auto; }
+.history button { width: 100%; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border: 0; background: none; border-radius: var(--radius-s); font-size: var(--fs-s); color: var(--text-2); text-align: left; }
+.history button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history button:hover { background: #e3e9f0; }
+.history button.on { background: #dde5ef; color: var(--text); }
+.history .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); margin-left: auto; flex-shrink: 0; }
+.user-bar { display: flex; align-items: center; gap: 10px; padding: 14px 8px; border-top: 1px solid var(--border); }
+.avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--primary-soft); color: var(--primary); display: grid; place-items: center; font-size: var(--fs-s); font-weight: 600; }
+.user-bar strong { display: block; font-size: var(--fs-s); font-weight: 600; }
+.user-bar small { font-size: var(--fs-xs); color: var(--text-3); }
+.user-bar .btn { margin-left: auto; padding: 0 6px; }
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--surface); }
+.topbar { height: 56px; flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 0 24px; border-bottom: 1px solid var(--border); }
+.topbar h1 { font-size: var(--fs-l); font-weight: 600; }
+.topbar .tail { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+/* ========== 聊天页 ========== */
+.chat-body { flex: 1; min-height: 0; display: flex; }
+.chat-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.chat-scroll { flex: 1; overflow: auto; }
+.thread { max-width: 760px; margin: 0 auto; padding: 28px 28px 8px; }
+.msg-user { display: flex; justify-content: flex-end; margin-bottom: 24px; }
+.msg-user div { max-width: 80%; background: var(--primary-soft); color: var(--text); padding: 11px 16px; border-radius: 12px 12px 4px 12px; line-height: 1.75; }
+.msg-ai { display: flex; gap: 12px; margin-bottom: 28px; }
+.msg-ai .logo-mark { width: 30px; height: 30px; font-size: 15px; border-radius: 8px; }
+.msg-ai .body { flex: 1; min-width: 0; }
+.process { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); margin-bottom: 14px; font-size: var(--fs-s); }
+.process summary { list-style: none; display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; color: var(--text-2); }
+.process summary::-webkit-details-marker { display: none; }
+.process summary .chev { margin-left: auto; transition: transform .15s; }
+.process[open] summary .chev { transform: rotate(180deg); }
+.process ol { margin: 0; padding: 4px 12px 12px 12px; list-style: none; border-top: 1px solid var(--border); }
+.step { display: grid; grid-template-columns: 22px 1fr; gap: 8px; padding-top: 10px; }
+.step .num { width: 20px; height: 20px; border-radius: 50%; background: var(--surface); border: 1px solid var(--border-strong); display: grid; place-items: center; font-size: 11px; color: var(--text-3); }
+.step strong { font-weight: 600; color: var(--text); }
+.step p { color: var(--text-2); margin-top: 3px; line-height: 1.7; }
+.q { display: inline-block; padding: 1px 8px; margin: 2px 4px 2px 0; border-radius: 4px; background: var(--surface); border: 1px solid var(--border); color: var(--text); }
+.answer { line-height: 1.9; color: var(--text); }
+.answer p { margin-bottom: 10px; }
+.answer table { border-collapse: collapse; margin: 6px 0 12px; font-size: var(--fs-s); }
+.answer th, .answer td { border: 1px solid var(--border); padding: 7px 14px; text-align: left; }
+.answer th { background: var(--surface-2); font-weight: 600; }
+.cite { display: inline-flex; align-items: center; gap: 3px; height: 22px; padding: 0 7px; margin: 0 2px; border-radius: 4px; font-size: var(--fs-xs); vertical-align: 1px; border: 1px solid transparent; cursor: pointer; }
+.cite.doc { background: var(--doc-soft); color: var(--doc); }
+.cite.exp { background: var(--exp-soft); color: var(--exp); }
+.cite.on { border-color: var(--doc); box-shadow: 0 0 0 2px var(--primary-line); }
+.callout { display: flex; gap: 10px; padding: 12px 14px; border-radius: var(--radius); background: var(--warn-soft); border: 1px solid #f1d9a8; color: #7a5208; font-size: var(--fs-s); line-height: 1.8; margin: 4px 0 12px; }
+.callout svg { color: var(--warn); margin-top: 3px; }
+.sources { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--border); }
+.sources > span { font-size: var(--fs-xs); color: var(--text-3); margin-right: 2px; }
+.source { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--radius-s); border: 1px solid var(--border); background: var(--surface); font-size: var(--fs-xs); color: var(--text-2); }
+.source:hover { border-color: var(--primary); }
+.source.gone { color: var(--text-3); text-decoration: line-through; cursor: not-allowed; }
+.msg-actions { display: flex; gap: 4px; margin-top: 10px; }
+.composer-wrap { padding: 8px 28px 18px; }
+.composer { max-width: 760px; margin: 0 auto; border: 1px solid var(--border-strong); border-radius: var(--radius-l); background: var(--surface); padding: 12px 14px 10px; box-shadow: var(--shadow); }
+.composer textarea { width: 100%; border: 0; outline: 0; resize: none; min-height: 46px; line-height: 1.7; }
+.composer textarea::placeholder { color: var(--text-3); }
+.composer-foot { display: flex; align-items: center; justify-content: space-between; font-size: var(--fs-xs); color: var(--text-3); }
+.composer-foot .btn.primary { width: 34px; height: 32px; padding: 0; justify-content: center; }
+.disclaimer { text-align: center; font-size: var(--fs-xs); color: var(--text-3); margin-top: 8px; }
+
+/* ========== 阅读器（知识库与证据栏共用） ========== */
+.evidence { width: 46%; max-width: 640px; min-width: 460px; border-left: 1px solid var(--border); display: flex; flex-direction: column; background: var(--bg); }
+.reader { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+.reader-head { flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.reader-head h2 { font-size: var(--fs-l); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reader-head .meta { font-size: var(--fs-xs); color: var(--text-3); margin-top: 2px; }
+.reader-head .grow { flex: 1; min-width: 0; }
+.reader-tools { flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 8px 16px; background: var(--surface); border-bottom: 1px solid var(--border); font-size: var(--fs-s); color: var(--text-2); }
+.reader-tools .page-input { width: 44px; height: 28px; border: 1px solid var(--border-strong); border-radius: 4px; text-align: center; }
+.reader-tools .grow { flex: 1; }
+.reader-body { flex: 1; min-height: 0; display: flex; }
+.pages { flex: 1; min-width: 0; overflow: auto; padding: 20px; }
+.sheet { background: #fff; width: 100%; max-width: 600px; margin: 0 auto 16px; aspect-ratio: 1 / 1.3; box-shadow: 0 1px 3px rgba(0,0,0,.12); padding: 7% 9%; font-family: "SimSun", "Songti SC", serif; font-size: 12.5px; line-height: 2; color: #222; position: relative; }
+.sheet .pno { position: absolute; bottom: 3%; left: 0; right: 0; text-align: center; font-size: 11px; color: #888; }
+.sheet h3 { text-align: center; font-size: 17px; font-weight: 700; margin-bottom: 14px; font-family: "SimHei", "Microsoft YaHei", sans-serif; }
+.sheet h4 { font-size: 13px; text-align: center; margin: 12px 0 4px; font-family: "SimHei", "Microsoft YaHei", sans-serif; }
+.seg { margin: 0 -6px; padding: 2px 6px; border-radius: 3px; text-indent: 2em; transition: background .15s, box-shadow .15s; }
+.sheet table { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 12px; }
+.sheet td, .sheet th { border: 1px solid #555; padding: 3px 8px; text-align: center; }
+/* 切分预览模式：各片段着色，当前片段加深并描边 */
+.mode-chunks .seg.c0 { background: rgba(47,100,214,.10); }
+.mode-chunks .seg.c1 { background: rgba(30,158,106,.10); }
+.mode-chunks .seg.c2 { background: rgba(183,112,27,.11); }
+.mode-chunks .seg.c3 { background: rgba(139,92,246,.10); }
+.mode-chunks .seg:hover { cursor: pointer; filter: saturate(1.6); }
+.mode-chunks .seg.active { background: rgba(47,100,214,.22); box-shadow: 0 0 0 2px var(--primary); }
+.mode-chunks.focus .seg:not(.active) { background: transparent; }
+.chunk-panel { width: 320px; flex-shrink: 0; overflow: auto; background: var(--surface); border-left: 1px solid var(--border); padding: 16px; font-size: var(--fs-s); }
+.mode-pdf .chunk-panel { display: none; }
+.chunk-panel h3 { font-size: var(--fs); font-weight: 600; margin-bottom: 10px; }
+.kv { display: grid; grid-template-columns: 64px 1fr; gap: 6px 10px; color: var(--text-2); margin-bottom: 14px; }
+.kv dt { color: var(--text-3); }
+.kv dd { margin: 0; }
+.chunk-text { padding: 12px; border-radius: var(--radius); background: var(--surface-2); border: 1px solid var(--border); line-height: 1.8; color: var(--text); white-space: pre-wrap; margin-bottom: 14px; }
+.diag { border: 1px dashed var(--border-strong); border-radius: var(--radius); padding: 12px; }
+.diag-title { display: flex; align-items: center; justify-content: space-between; font-size: var(--fs-xs); color: var(--text-3); margin-bottom: 8px; }
+.diag .kv { margin: 0; grid-template-columns: 76px 1fr; font-size: var(--fs-xs); }
+.chunk-nav { display: flex; gap: 6px; margin-bottom: 14px; }
+.chunk-nav .btn { flex: 1; justify-content: center; }
+.evidence .chunk-card { flex-shrink: 0; background: var(--surface); border-top: 1px solid var(--border); padding: 12px 16px; font-size: var(--fs-s); max-height: 34%; overflow: auto; }
+.evidence .chunk-card .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.evidence .chunk-card p { color: var(--text-2); line-height: 1.8; }
+.role-employee .admin-only { display: none !important; }
+
+/* ========== 知识库 ========== */
+.library { flex: 1; min-height: 0; display: flex; }
+.list-pane { width: 340px; flex-shrink: 0; border-right: 1px solid var(--border); display: flex; flex-direction: column; background: var(--surface); }
+.list-head { padding: 14px 16px 10px; display: grid; gap: 10px; border-bottom: 1px solid var(--border); }
+.list-head .row { display: flex; align-items: center; gap: 8px; }
+.list-head .segmented { flex: 1; }
+.list-head .segmented button { flex: 1; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid var(--border); background: var(--surface); font-size: var(--fs-xs); color: var(--text-2); }
+.chip.on { background: var(--exp-soft); border-color: var(--exp-line); color: var(--exp); }
+.list { flex: 1; overflow: auto; padding: 8px; }
+.item { display: block; width: 100%; text-align: left; border: 1px solid transparent; background: none; border-radius: var(--radius); padding: 12px; margin-bottom: 2px; }
+.item:hover { background: var(--surface-2); }
+.item.on { background: var(--primary-soft); border-color: var(--primary-line); }
+.item .t { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.item .t span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .m { font-size: var(--fs-xs); color: var(--text-3); margin-bottom: 6px; }
+.item .s { font-size: var(--fs-s); color: var(--text-2); line-height: 1.7; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.item mark { background: #fff1b8; color: inherit; padding: 0 1px; }
+.list-foot { padding: 10px 16px; border-top: 1px solid var(--border); font-size: var(--fs-xs); color: var(--text-3); line-height: 1.7; }
+.exp-reader { flex: 1; overflow: auto; padding: 28px 36px; background: var(--surface); }
+.exp-reader .paper { max-width: 720px; }
+.exp-reader h2 { font-size: var(--fs-xl); font-weight: 600; margin: 10px 0 6px; }
+.exp-reader .by { font-size: var(--fs-s); color: var(--text-3); margin-bottom: 18px; }
+.exp-reader .content { line-height: 2; font-size: 15px; white-space: pre-wrap; }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2V5Z"/><path d="M8 7h7M8 11h5"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V3M7 8l5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></symbol>
+  <symbol id="i-out" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z"/><path d="M14 3v6h6"/></symbol>
+  <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V16h8v-1.3A7 7 0 0 0 12 2Z"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3 2 21h20L12 3Z"/><path d="M12 10v5M12 18h.01"/></symbol>
+  <symbol id="i-steps" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M6 8.5v7M11 6h9M11 18h9"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></symbol>
+</svg>
+
+<div class="mock-bar">
+  <strong>样稿</strong>
+  <button data-screen="login">登录页</button>
+  <button data-screen="chat" class="on">办事助手 · 证据栏</button>
+  <button data-screen="library">知识库 · 阅读器</button>
+  <span class="sep"></span>
+  <label>查看身份
+    <span class="segmented" style="background:#374151">
+      <button data-role="admin" class="on">管理员</button>
+      <button data-role="employee">普通员工</button>
+    </span>
+  </label>
+</div>
+
+<!-- ==================== 登录页 ==================== -->
+<section class="screen" id="login">
+  <div class="login">
+    <aside class="login-side">
+      <div class="logo"><div class="logo-mark">办</div>办事助手</div>
+      <div class="login-hero">
+        <h1>制度有出处，经验能共享，<br>问题有人答。</h1>
+        <p>部门制度、同事经验与智能问答，集中在一个工作台。</p>
+        <div class="features">
+          <div class="feature"><div class="ico"><svg class="i"><use href="#i-chat"/></svg></div><div><strong>办事问答</strong><span>说清要办什么，助手查制度、问细节，给出步骤与材料</span></div></div>
+          <div class="feature"><div class="ico"><svg class="i"><use href="#i-book"/></svg></div><div><strong>回答可核对</strong><span>每条依据都能点开原文，定位并高亮到具体段落</span></div></div>
+          <div class="feature"><div class="ico"><svg class="i"><use href="#i-bulb"/></svg></div><div><strong>同事经验</strong><span>办事中摸索出的做法，审核后全部门共享</span></div></div>
+        </div>
+      </div>
+      <small>内部试用版 · 回答仅供参考，以现行制度原文为准</small>
+    </aside>
+    <main class="login-main">
+      <form class="login-card" onsubmit="return false">
+        <h2>登录</h2>
+        <p>使用部门分配的账号进入工作台</p>
+        <div class="field"><label>账号</label><div class="input"><input value="admin"></div></div>
+        <div class="field"><label>密码</label><div class="input"><input type="password" value="placeholder"></div></div>
+        <button class="btn primary">登录</button>
+        <div class="login-tip">本地测试账号：admin / alice / bob<br>初始密码见项目 README</div>
+      </form>
+    </main>
+  </div>
+</section>
+
+<!-- ==================== 办事助手 + 证据栏 ==================== -->
+<section class="screen on" id="chat">
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="logo"><div class="logo-mark">办</div><div>办事助手<small>部门工作台</small></div></div>
+      <button class="btn primary new-chat"><svg class="i"><use href="#i-plus"/></svg>新对话</button>
+      <nav class="nav">
+        <button class="on"><svg class="i"><use href="#i-chat"/></svg>办事助手</button>
+        <button data-goto="library"><svg class="i"><use href="#i-book"/></svg>知识库</button>
+        <button><svg class="i"><use href="#i-edit"/></svg>记录经验</button>
+        <button><svg class="i"><use href="#i-list"/></svg>我的记录</button>
+        <button class="admin-only"><svg class="i"><use href="#i-check"/></svg>管理工作台<span class="badge">3</span></button>
+      </nav>
+      <div class="group-label">今天</div>
+      <div class="history">
+        <button class="on"><span>出差住宿的报销限额</span></button>
+        <button><span>外地培训回来报销需要什么材料</span><i class="dot" title="等待回答"></i></button>
+        <div class="group-label">更早</div>
+        <button><span>购买办公用品的流程</span></button>
+        <button><span>培训费能否和差旅费一起报</span></button>
+      </div>
+      <div class="user-bar"><div class="avatar">管</div><div><strong>管理员</strong><small class="role-text">管理员</small></div><button class="btn ghost" title="退出登录"><svg class="i"><use href="#i-out"/></svg></button></div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <h1>出差住宿的报销限额</h1>
+        <div class="tail"><span class="tag gray">deepseek-flash</span><button class="btn ghost small"><svg class="i"><use href="#i-more"/></svg></button></div>
+      </header>
+      <div class="chat-body">
+        <div class="chat-col">
+          <div class="chat-scroll">
+            <div class="thread">
+              <div class="msg-user"><div>下个月去上海出差 3 天，住宿最多能报多少？</div></div>
+              <div class="msg-ai">
+                <div class="logo-mark">办</div>
+                <div class="body">
+                  <details class="process" open>
+                    <summary><svg class="i"><use href="#i-steps"/></svg>查阅了 2 份制度、1 条经验 · 3 步<svg class="i chev"><use href="#i-down"/></svg></summary>
+                    <ol>
+                      <li class="step"><span class="num">1</span><div><strong>搜索正文</strong><p><span class="q">出差住宿费报销限额</span><span class="q">住宿费标准 城市类别</span></p><p>命中制度 5 条（来自 2 份文件）· 经验 1 条</p></div></li>
+                      <li class="step"><span class="num">2</span><div><strong>读取内容</strong><p>《模拟差旅费管理办法》第十一条 · 整条条款 · 第 3 页</p></div></li>
+                      <li class="step"><span class="num">3</span><div><strong>读取内容</strong><p>附表 1 住宿费标准 · 整表 · 第 6 页</p></div></li>
+                    </ol>
+                  </details>
+                  <div class="answer">
+                    <p>上海属于一类城市。按《模拟差旅费管理办法》第十一条，住宿费在限额内<strong>凭发票据实报销</strong>，一类城市每人每天不超过 <strong>500 元</strong><a class="cite doc on" data-target="c2">模拟差旅费管理办法 · 第 3 页</a>。</p>
+                    <table>
+                      <tr><th>城市类别</th><th>每人每天限额</th></tr>
+                      <tr><td>一类城市（含上海）</td><td>500 元</td></tr>
+                      <tr><td>二类城市</td><td>380 元</td></tr>
+                      <tr><td>其他地区</td><td>300 元</td></tr>
+                    </table>
+                    <p>出差 3 天通常住 2 晚，限额合计 <strong>1000 元</strong>，超出部分自理<a class="cite doc" data-target="c3">模拟差旅费管理办法 · 第 3 页</a>。</p>
+                    <div class="callout"><svg class="i"><use href="#i-warn"/></svg><div><strong>这里按经验处理，与制度第十二条不同。</strong>制度规定两人同性别出差应合住<a class="cite doc" data-target="c3">第 3 页</a>；同事经验说明，财务目前对单人入住不再要求合住说明<a class="cite exp">某同事的经验</a>。</div></div>
+                    <p class="muted" style="font-size:var(--fs-s)">以上依据来自模拟资料，仅用于演示。</p>
+                  </div>
+                  <div class="sources">
+                    <span>查阅资料</span>
+                    <button class="source"><span class="tag doc">制度</span>模拟差旅费管理办法 · 第 3 页</button>
+                    <button class="source"><span class="tag doc">制度</span>模拟差旅费管理办法 · 第 6 页</button>
+                    <button class="source"><span class="tag exp">经验</span>单人入住不需合住说明</button>
+                    <button class="source gone"><span class="tag gray">制度</span>旧版报销细则（已删除）</button>
+                  </div>
+                  <div class="msg-actions"><button class="btn ghost small"><svg class="i"><use href="#i-copy"/></svg>复制</button></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="composer-wrap">
+            <div class="composer">
+              <textarea placeholder="继续追问，或描述你要办的事…"></textarea>
+              <div class="composer-foot"><span>Enter 发送 · Shift + Enter 换行</span><button class="btn primary" title="发送"><svg class="i"><use href="#i-send"/></svg></button></div>
+            </div>
+            <p class="disclaimer">回答仅供参考，请以现行制度原文为准。</p>
+          </div>
+        </div>
+
+        <aside class="evidence">
+          <div class="reader-head">
+            <span class="tag doc">制度</span>
+            <div class="grow"><h2>模拟差旅费管理办法</h2><div class="meta">travel.pdf · 共 8 页</div></div>
+            <button class="btn ghost small" title="在知识库中打开"><svg class="i"><use href="#i-ext"/></svg></button>
+            <button class="btn ghost small" title="关闭证据栏"><svg class="i"><use href="#i-x"/></svg></button>
+          </div>
+          <div class="reader-tools">
+            <span class="segmented mode-switch"><button data-mode="chunks" class="on">切分预览</button><button data-mode="pdf">原文</button></span>
+            <span class="grow"></span>
+            第 <input class="page-input" value="3"> / 8 页
+          </div>
+          <div class="reader-body mode-chunks focus">
+            <div class="pages">
+              <div class="sheet">
+                <h4>第三章　住宿费</h4>
+                <p class="seg c1">第十条　出差人员应当在职务级别对应的住宿费标准限额内，选择安全、经济、便捷的宾馆住宿。</p>
+                <p class="seg c2 active" id="c2">第十一条　住宿费在标准限额内凭发票据实报销。一类城市每人每天不超过500元，二类城市每人每天不超过380元，其他地区每人每天不超过300元。城市类别见附表1。</p>
+                <p class="seg c3" id="c3">第十二条　出差人员两人以上同性别出差的，原则上合住一间。超出标准限额的部分由个人承担，不得以其他名义变相报销。</p>
+                <h4>第四章　伙食补助费</h4>
+                <p class="seg c0">第十三条　伙食补助费按出差自然（日历）天数计算，按规定标准包干使用，每人每天100元。</p>
+                <p class="seg c1">第十四条　出差人员由接待单位统一安排用餐的，应当向接待单位交纳伙食费。</p>
+                <span class="pno">— 3 —</span>
+              </div>
+            </div>
+          </div>
+          <div class="chunk-card">
+            <div class="row"><strong>被引用片段</strong><span class="tag gray">第三章 · 第十一条</span><span class="tag gray">第 3 页</span><span class="grow" style="flex:1"></span><span class="muted" style="font-size:var(--fs-xs)">本回答引用 1 / 3</span></div>
+            <p>第十一条　住宿费在标准限额内凭发票据实报销。一类城市每人每天不超过500元……</p>
+            <div class="diag admin-only" style="margin-top:10px">
+              <div class="diag-title"><span>诊断信息</span><span class="tag gray">仅管理员可见</span></div>
+              <dl class="kv"><dt>片段</dt><dd>#14 · 62 tokens</dd><dt>阅读边界</dt><dd><span class="tag ok">已按结构确认</span></dd><dt>定位</dt><dd>高亮区域完整</dd></dl>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </main>
+  </div>
+</section>
+
+<!-- ==================== 知识库 + 阅读器 ==================== -->
+<section class="screen" id="library">
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="logo"><div class="logo-mark">办</div><div>办事助手<small>部门工作台</small></div></div>
+      <button class="btn primary new-chat"><svg class="i"><use href="#i-plus"/></svg>新对话</button>
+      <nav class="nav">
+        <button data-goto="chat"><svg class="i"><use href="#i-chat"/></svg>办事助手</button>
+        <button class="on"><svg class="i"><use href="#i-book"/></svg>知识库</button>
+        <button><svg class="i"><use href="#i-edit"/></svg>记录经验</button>
+        <button><svg class="i"><use href="#i-list"/></svg>我的记录</button>
+        <button class="admin-only"><svg class="i"><use href="#i-check"/></svg>管理工作台<span class="badge">3</span></button>
+      </nav>
+      <div class="group-label">今天</div>
+      <div class="history">
+        <button><span>出差住宿的报销限额</span></button>
+        <button><span>外地培训回来报销需要什么材料</span><i class="dot"></i></button>
+        <div class="group-label">更早</div>
+        <button><span>购买办公用品的流程</span></button>
+      </div>
+      <div class="user-bar"><div class="avatar">管</div><div><strong>管理员</strong><small class="role-text">管理员</small></div><button class="btn ghost"><svg class="i"><use href="#i-out"/></svg></button></div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <h1>知识库</h1><span class="muted" style="font-size:var(--fs-s)">制度是正式规定，经验是同事的实际做法，两者分开标识</span>
+        <div class="tail admin-only">
+          <button class="btn"><svg class="i"><use href="#i-more"/></svg>重置测试数据</button>
+          <button class="btn primary"><svg class="i"><use href="#i-upload"/></svg>上传 PDF</button>
+        </div>
+      </header>
+      <div class="library">
+        <aside class="list-pane">
+          <div class="list-head">
+            <div class="row"><span class="segmented lib-tabs"><button data-tab="docs" class="on">制度 3</button><button data-tab="exps">经验 12</button></span></div>
+            <div class="input"><svg class="i"><use href="#i-search"/></svg><input placeholder="搜索标题或正文关键词" value="住宿"></div>
+            <div class="chips tab-exps hidden"><button class="chip on">差旅</button><button class="chip">报销</button><button class="chip">采购要求</button><button class="chip">培训</button><button class="chip">+ 更多</button></div>
+          </div>
+          <div class="list tab-docs">
+            <button class="item on"><div class="t"><svg class="i" style="color:var(--doc)"><use href="#i-file"/></svg><span>模拟差旅费管理办法</span></div><div class="m">PDF · 8 页 · 第 3 页命中 · 2026-11-10</div><div class="s">第十一条 <mark>住宿</mark>费在标准限额内凭发票据实报销。一类城市每人每天不超过500元……</div></button>
+            <button class="item"><div class="t"><svg class="i" style="color:var(--doc)"><use href="#i-file"/></svg><span>模拟培训费管理办法</span></div><div class="m">PDF · 6 页 · 第 2 页命中 · 2026-11-10</div><div class="s">培训期间的<mark>住宿</mark>费由培训组织单位统一安排，参训人员不再另行报销……</div></button>
+            <button class="item"><div class="t"><svg class="i" style="color:var(--doc)"><use href="#i-file"/></svg><span>模拟采购管理办法</span></div><div class="m">PDF · 扫描件 · 12 页 · 2026-11-10</div><div class="s">本办法适用于部门办公用品、设备及服务的采购……</div></button>
+          </div>
+          <div class="list tab-exps hidden">
+            <button class="item on"><div class="t"><span class="tag exp">经验</span><span>单人入住不需合住说明</span></div><div class="m">差旅 · 报销 · 某同事 · 11-12 发布</div><div class="s">去年起财务对单人入住不再要求合住说明，按单人标准报销即可……</div></button>
+            <button class="item"><div class="t"><span class="tag exp">经验</span><span>培训发票抬头要写全称</span></div><div class="m">培训 · 报销 · 某同事 · 11-08 发布</div><div class="s">培训机构开票时容易写简称，财务会退回，提前提醒对方写单位全称……</div></button>
+          </div>
+          <div class="list-foot admin-only">支持文字及扫描 PDF，单份不超过 20 MB、200 页；扫描页在本机识别，耗时较长。</div>
+        </aside>
+
+        <!-- 制度阅读器 -->
+        <section class="reader tab-docs">
+          <div class="reader-head">
+            <span class="tag doc">制度</span>
+            <div class="grow"><h2>模拟差旅费管理办法</h2><div class="meta">travel.pdf · 8 页 · 42 个检索片段 · 2026-11-10 上传</div></div>
+            <button class="btn small"><svg class="i"><use href="#i-ext"/></svg>新窗口打开</button>
+            <button class="btn small danger admin-only">删除制度</button>
+          </div>
+          <div class="reader-tools">
+            <span class="segmented mode-switch"><button data-mode="chunks" class="on">切分预览</button><button data-mode="pdf">原文</button></span>
+            <span class="muted mode-hint">悬停查看片段，点击固定</span>
+            <span class="grow"></span>
+            第 <input class="page-input" value="3"> / 8 页
+            <button class="btn small">适应宽度</button>
+          </div>
+          <div class="reader-body mode-chunks">
+            <div class="pages">
+              <div class="sheet">
+                <h4>第三章　住宿费</h4>
+                <p class="seg c1">第十条　出差人员应当在职务级别对应的住宿费标准限额内，选择安全、经济、便捷的宾馆住宿。</p>
+                <p class="seg c2 active">第十一条　住宿费在标准限额内凭发票据实报销。一类城市每人每天不超过500元，二类城市每人每天不超过380元，其他地区每人每天不超过300元。城市类别见附表1。</p>
+                <p class="seg c3">第十二条　出差人员两人以上同性别出差的，原则上合住一间。超出标准限额的部分由个人承担，不得以其他名义变相报销。</p>
+                <h4>第四章　伙食补助费</h4>
+                <p class="seg c0">第十三条　伙食补助费按出差自然（日历）天数计算，按规定标准包干使用，每人每天100元。</p>
+                <p class="seg c1">第十四条　出差人员由接待单位统一安排用餐的，应当向接待单位交纳伙食费。</p>
+                <span class="pno">— 3 —</span>
+              </div>
+              <div class="sheet">
+                <h4>附表1　住宿费标准</h4>
+                <table>
+                  <tr><th>城市类别</th><th>包含城市</th><th>限额（元/人·天）</th></tr>
+                  <tr class="seg c0"><td>一类</td><td>北京、上海、广州、深圳</td><td>500</td></tr>
+                  <tr class="seg c1"><td>二类</td><td>省会城市、计划单列市</td><td>380</td></tr>
+                  <tr class="seg c2"><td>其他</td><td>其他地区</td><td>300</td></tr>
+                </table>
+                <span class="pno">— 6 —</span>
+              </div>
+            </div>
+            <aside class="chunk-panel">
+              <div class="chunk-nav"><button class="btn small">‹ 上一片段</button><button class="btn small">下一片段 ›</button></div>
+              <h3>片段 15 · 第十一条</h3>
+              <dl class="kv"><dt>所属</dt><dd>第三章 住宿费 · 第十一条</dd><dt>页码</dt><dd>第 3 页</dd></dl>
+              <div class="chunk-text">第十一条　住宿费在标准限额内凭发票据实报销。一类城市每人每天不超过500元，二类城市每人每天不超过380元，其他地区每人每天不超过300元。城市类别见附表1。</div>
+              <div class="diag admin-only">
+                <div class="diag-title"><span>诊断信息</span><span class="tag gray">仅管理员可见</span></div>
+                <dl class="kv">
+                  <dt>正文长度</dt><dd>62 tokens</dd>
+                  <dt>阅读边界</dt><dd><span class="tag ok">已按结构确认</span></dd>
+                  <dt>高亮定位</dt><dd>区域完整</dd>
+                  <dt>节点</dt><dd>n_3f9a…c21</dd>
+                  <dt>排除块</dt><dd>本文件 6 个页边、页脚块</dd>
+                </dl>
+              </div>
+              <p class="muted" style="margin-top:12px;font-size:var(--fs-xs);line-height:1.7">切分预览显示检索时实际使用的片段；助手回答引用的就是这些片段。</p>
+            </aside>
+          </div>
+        </section>
+
+        <!-- 经验阅读 -->
+        <section class="exp-reader tab-exps hidden">
+          <div class="paper">
+            <span class="tag exp">经验</span>
+            <h2>单人入住不需合住说明</h2>
+            <div class="by">某同事 分享 · 经管理员审核 · 2026-11-12 发布</div>
+            <div class="callout"><svg class="i"><use href="#i-warn"/></svg><div><strong>这条经验与制度规定不同</strong><br>《模拟差旅费管理办法》第十二条要求同性别两人以上合住；财务目前的实际做法见下文。</div></div>
+            <div class="content">去年起财务对单人入住不再要求附合住说明，按单人标准、在限额内凭发票报销即可。
+如果和同事一起出差但分开住，报销时各自提交，不用互相签字。</div>
+            <div class="chips" style="margin-top:20px"><span class="chip on">差旅</span><span class="chip">报销</span></div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+</section>
+
+<script>
+// 仅用于样稿切换，不代表实现方式。
+const $$ = (s, root = document) => [...root.querySelectorAll(s)]
+function show(id) {
+  $$('.screen').forEach(el => el.classList.toggle('on', el.id === id))
+  $$('[data-screen]').forEach(b => b.classList.toggle('on', b.dataset.screen === id))
+}
+$$('[data-screen]').forEach(b => b.onclick = () => show(b.dataset.screen))
+$$('[data-goto]').forEach(b => b.onclick = () => show(b.dataset.goto))
+$$('[data-role]').forEach(b => b.onclick = () => {
+  $$('[data-role]').forEach(x => x.classList.toggle('on', x === b))
+  const employee = b.dataset.role === 'employee'
+  document.body.classList.toggle('role-employee', employee)
+  $$('.avatar').forEach(a => a.textContent = employee ? '丽' : '管')
+  $$('.user-bar strong').forEach(s => s.textContent = employee ? 'Alice' : '管理员')
+  $$('.role-text').forEach(s => s.textContent = employee ? '普通员工' : '管理员')
+})
+$$('.mode-switch').forEach(group => group.onclick = event => {
+  const button = event.target.closest('[data-mode]'); if (!button) return
+  $$('[data-mode]', group).forEach(x => x.classList.toggle('on', x === button))
+  const reader = group.closest('.reader, .evidence')
+  const body = reader.querySelector('.reader-body')
+  body.classList.toggle('mode-chunks', button.dataset.mode === 'chunks')
+  body.classList.toggle('mode-pdf', button.dataset.mode === 'pdf')
+  const hint = reader.querySelector('.mode-hint'); if (hint) hint.classList.toggle('hidden', button.dataset.mode !== 'chunks')
+  const card = reader.querySelector('.chunk-card'); if (card) card.classList.toggle('hidden', button.dataset.mode !== 'chunks')
+})
+$$('.lib-tabs [data-tab]').forEach(b => b.onclick = () => {
+  $$('.lib-tabs [data-tab]').forEach(x => x.classList.toggle('on', x === b))
+  const docs = b.dataset.tab === 'docs'
+  $$('#library .tab-docs').forEach(el => el.classList.toggle('hidden', !docs))
+  $$('#library .tab-exps').forEach(el => el.classList.toggle('hidden', docs))
+})
+// 点击片段：切换当前片段
+$$('.reader-body').forEach(body => body.addEventListener('click', event => {
+  const seg = event.target.closest('.seg'); if (!seg || !body.classList.contains('mode-chunks')) return
+  $$('.seg', body).forEach(x => x.classList.toggle('active', x === seg))
+}))
+// 点击回答中的制度引用：证据栏高亮对应片段
+$$('.cite.doc').forEach(c => c.onclick = () => {
+  $$('.cite').forEach(x => x.classList.toggle('on', x === c))
+  const target = document.getElementById(c.dataset.target); if (!target) return
+  $$('#chat .seg').forEach(x => x.classList.toggle('active', x === target))
+  target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+})
+</script>
+</body>
+</html>

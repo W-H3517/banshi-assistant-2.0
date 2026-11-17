@@ -42,6 +42,29 @@ def detail(conversation):
     )}
 
 
+SHOWN_ARGS = {"search_documents": ("queries",), "locate_document_structure": ("query",),
+              "read_document_content": ("scope", "page"), "ask_question": ("question",)}
+
+
+def tool_input(name, args):
+    """界面“检索过程”显示的工具输入：只保留能说明查了什么的参数。"""
+    return {key: args[key] for key in SHOWN_ARGS.get(name, ()) if args.get(key) not in (None, "")}
+
+
+def tool_summary(name, content):
+    """界面“检索过程”显示的工具结果摘要，不含正文。"""
+    if name == "search_documents":
+        return {key: len(content[key]) for key in ("items", "documents", "experiences")}
+    if name == "locate_document_structure":
+        return {"total": content["total"]}
+    if name == "ask_question":
+        return {"answer": content}  # 恢复执行时的结果就是用户的回答
+    if "experiences" in content:
+        return {"experience": "、".join(content["experiences"][0]["tags"])}
+    return {"title": content["target"]["title"], "path": content["target"]["path"],
+            "pages": sorted({page for item in content["items"] for page in item["pages"]})}
+
+
 class ChatService:
     def __init__(self, db, settings, agent_factory=create_agent, instrumentation=None):
         self.db, self.settings, self.agent_factory = db, settings, agent_factory
@@ -165,6 +188,19 @@ class ChatService:
         else:
             transcript.append({"role": "user", "text": prompt})
 
+        def cite(doc_id, page, title, node_id):
+            """记录一处制度来源：同一文件同一页只列一条，nodes 累计本轮在该页检索或读取过的段落。"""
+            source = next((s for s in assistant["sources"] if s["kind"] == "document"
+                           and s["id"] == doc_id and s["page"] == page), None)
+            if source is None:
+                source = {"id": doc_id, "page": page, "kind": "document", "title": title, "nodes": []}
+                assistant["sources"].append(source)
+            elif node_id is None or node_id in source["nodes"]:
+                return
+            if node_id:
+                source["nodes"].append(node_id)
+            queue.put_nowait({"type": "source", **source, "nodes": [*source["nodes"]]})
+
         async def events(ctx, stream):
             async for event in stream:
                 text = None
@@ -174,16 +210,20 @@ class ChatService:
                 elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
                     text = event.delta.content_delta
                 elif isinstance(event, FunctionToolCallEvent):
-                    tool = {"id": event.tool_call_id, "name": event.part.tool_name,
-                            "status": "running"}
+                    name = event.part.tool_name
+                    tool = {"id": event.tool_call_id, "name": name, "status": "running",
+                            "input": tool_input(name, event.part.args_as_dict())}
                     assistant["tools"].append(tool)
                     queue.put_nowait({"type": "tool", **tool})
                 elif isinstance(event, FunctionToolResultEvent):
+                    succeeded = isinstance(event.part, ToolReturnPart) and event.part.outcome == "success"
                     for tool in assistant["tools"]:
                         if tool["id"] == event.tool_call_id:
                             tool["status"] = "done"
+                            if succeeded:
+                                tool["result"] = tool_summary(tool["name"], event.part.content)
                             queue.put_nowait({"type": "tool", **tool})
-                    if isinstance(event.part, ToolReturnPart) and event.part.outcome == "success" and event.part.tool_name in {
+                    if succeeded and event.part.tool_name in {
                         "search_documents", "read_document_content",
                     }:
                         content = event.part.content
@@ -202,11 +242,8 @@ class ChatService:
                         if isinstance(content, list):
                             for doc in content:
                                 for page in doc.get("pages", [doc.get("page")]):
-                                    source = {"id": doc["id"], "page": page, "kind": "document",
-                                              "title": doc.get("title") or titles[doc["id"]]}
-                                    if source not in assistant["sources"]:
-                                        assistant["sources"].append(source)
-                                        queue.put_nowait({"type": "source", **source})
+                                    cite(doc["id"], page, doc.get("title") or titles[doc["id"]],
+                                         doc.get("node_id"))
                 if text:
                     assistant["text"] += text
                     queue.put_nowait({"type": "delta", "text": text})

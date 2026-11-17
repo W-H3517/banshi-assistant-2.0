@@ -188,6 +188,15 @@ def test_agent_locate_read_search_and_sources(tmp_path):
         assert message["sources"] and all(t["status"] == "done" for t in message["tools"])
         assert [t["name"] for t in message["tools"]] == [
             "locate_document_structure", "read_document_content", "search_documents"]
+        # 来源按文件和页合并，并记录本轮在该页检索或读取过的段落，供证据栏高亮。
+        documents = [s for s in message["sources"] if s["kind"] == "document"]
+        assert len({(s["id"], s["page"]) for s in documents}) == len(documents)
+        assert any(s["nodes"] for s in documents)
+        # 工具调用带查询内容和结果摘要，供界面展示检索过程。
+        locate, read, search = message["tools"]
+        assert "total" in locate["result"]
+        assert read["result"]["title"] and read["result"]["pages"]
+        assert search["input"]["queries"] and set(search["result"]) == {"items", "documents", "experiences"}
         for transport in clients:
             client.portal.call(transport.aclose)
 

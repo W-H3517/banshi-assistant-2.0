@@ -19,6 +19,11 @@ CHUNK_COLUMNS = ("ordinal", "node_id", "content")
 DUPLICATE = "该 PDF 已在知识库中，无需重复上传"
 
 
+# 普通员工在切分预览里能看到的片段字段；其余为管理员诊断信息。
+READER_FIELDS = ("ordinal", "node_id", "parent_id", "title", "chapter", "source", "pages",
+                 "content", "regions", "row", "header_pages")
+
+
 class DuplicateDocument(ValueError):
     pass
 
@@ -156,20 +161,29 @@ class Library:
                            "match_page": hit["page"] if hit else 1})
         return result
 
-    async def preview(self, document_id):
-        """管理员切分预览：实际入库的检索片段及其高亮区域；文档不存在时返回 None。"""
+    async def preview(self, document_id, diagnostics):
+        """切分预览：实际入库的检索片段及其高亮区域；文档不存在时返回 None。
+
+        所有登录用户都能看片段的正文、所属和位置；diagnostics 为真（管理员）时另带
+        token 数、阅读边界、定位状态等诊断信息。parent_id 用于把整表的引用对应到各行片段。
+        """
         async with self.db.sessions() as session:
             document = await session.get(Document, document_id)
             if document is None:
                 return None
-            version, meta = (await session.execute(select(
-                DocumentIndex.version, DocumentIndex.meta,
+            version, meta, nodes = (await session.execute(select(
+                DocumentIndex.version, DocumentIndex.meta, DocumentIndex.nodes,
             ).where(DocumentIndex.document_id == document_id))).one()
             chunks = (await session.execute(select(
                 Chunk.ordinal, Chunk.node_id, Chunk.content, Chunk.detail,
             ).where(Chunk.document_id == document_id).order_by(Chunk.ordinal))).all()
-        return {"version": version, **{key: meta[key] for key in (
-                    "pages", "ocr_pages", "warnings", "removed_line_count")},
-                "chunks": [{**chunk.detail, "ordinal": chunk.ordinal, "node_id": chunk.node_id,
-                            "content": chunk.content} for chunk in chunks],
-                "document": public_document(document)}
+        parents = {node["id"]: node["parent_id"] for node in nodes}
+        items = [{**chunk.detail, "ordinal": chunk.ordinal, "node_id": chunk.node_id,
+                  "parent_id": parents[chunk.node_id], "content": chunk.content} for chunk in chunks]
+        result = {"pages": meta["pages"], "ocr_pages": meta["ocr_pages"], "warnings": meta["warnings"],
+                  "document": public_document(document)}
+        if diagnostics:
+            return {**result, "version": version, "removed_line_count": meta["removed_line_count"],
+                    "chunks": items}
+        return {**result, "chunks": [{key: item[key] for key in READER_FIELDS if key in item}
+                                     for item in items]}

@@ -15,5 +15,8 @@ const suggestions = computed(() => props.options.filter(tag => !tags.value.inclu
 </template>
 
 <style scoped>
-.tag-input{display:grid;gap:8px}.tag-suggestions{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12px;color:#7c8983}.tag-suggestions button{border:1px dashed #c9d8cd;background:none;border-radius:12px;padding:2px 10px;font-size:12px;color:#54705f}.tag-suggestions button:hover:not(:disabled){border-style:solid;background:#edf4f0}
+.tag-input { display: grid; gap: 8px; min-width: 0; }
+.tag-suggestions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: var(--fs-xs); color: var(--text-2); }
+.tag-suggestions button { border: 1px solid var(--exp-line); background: var(--exp-soft); border-radius: var(--radius-s); padding: 3px 9px; font-size: var(--fs-xs); color: var(--exp); overflow-wrap: anywhere; }
+.tag-suggestions button:hover:not(:disabled) { border-color: var(--exp); }
 </style>

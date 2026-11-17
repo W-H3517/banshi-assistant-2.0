@@ -1,0 +1,61 @@
+/* 设计变量：蓝灰办公风。新写的页面只用这里的变量，不再硬编码颜色和字号。 */
+:root {
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --surface-2: #f8fafc;
+  --sidebar: #eef2f6;
+  --border: #e2e7ee;
+  --border-strong: #cdd5e0;
+  --text: #1f2a37;
+  --text-2: #4a5565;
+  --text-3: #7b8798;
+
+  --primary: #2f64d6;
+  --primary-hover: #2753b5;
+  --primary-soft: #eaf1fd;
+  --primary-line: #c4d6f7;
+
+  --on-primary: #fff;
+  --paper: #fff;
+  --hover-fill: #e3e9f0;
+  --selected-fill: #dde5ef;
+  --neutral-tag: #eef1f5;
+  --segmented-fill: #e9edf3;
+  --warn-text: #7a5208;
+  --brand-text: #e6edf9;
+  --brand-dark: #1d3566;
+  --brand-mid: #23458a;
+  --brand-muted: #b9c8e6;
+  --brand-caption: #94a8d0;
+
+  /* 切分预览按片段序号循环使用这四种标记色；引用段落仍用主色蓝。 */
+  --chunk-yellow: #f5cc45;
+  --chunk-green: #6ac8aa;
+  --chunk-violet: #b69cf0;
+  --chunk-orange: #f0a17f;
+
+  /* 制度与经验各用一套固定颜色，贯穿引用、来源和知识库。 */
+  --doc: #2f64d6;
+  --doc-soft: #eaf1fd;
+  --exp: #b7701b;
+  --exp-soft: #fdf3e3;
+  --exp-line: #f0d5ab;
+
+  --success: #1e9e6a;
+  --warn: #c27c0e;
+  --warn-soft: #fff7e8;
+  --danger: #d14343;
+
+  --radius-s: 6px;
+  --radius: 8px;
+  --radius-l: 12px;
+  --shadow: 0 1px 2px rgba(31, 42, 55, .06), 0 4px 16px rgba(31, 42, 55, .06);
+
+  /* 正文不低于 14px，辅助文字不低于 12px。 */
+  --fs-xs: 12px;
+  --fs-s: 13px;
+  --fs: 14px;
+  --fs-l: 16px;
+  --fs-xl: 20px;
+  --fs-2xl: 28px;
+}

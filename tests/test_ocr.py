@@ -131,7 +131,7 @@ def test_scanned_upload_preview_search_restart_and_delete(tmp_path, monkeypatch)
         client.portal.call(check_rows)
         assert client.post('/api/documents', files={'file': ('重复.pdf', raw)}).status_code == 409
         login(client, 'alice')
-        assert client.get(path+'/chunk-preview').status_code == 403
+        assert 'token_count' not in client.get(path+'/chunk-preview').json()['chunks'][0]
         client.post('/api/logout')
         assert client.get(path+'/chunk-preview').status_code == 401
     with TestClient(create_app(settings)) as client:

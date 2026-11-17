@@ -85,7 +85,8 @@ def test_delete_documents_permissions_indexes_and_restart(tmp_path):
         conversation = client.post("/api/conversations").json()
         transcript = [{"role": "assistant", "text": (
             f"历史回答 [制度，第 1 页](/api/documents/{initial[0]['id']}#page=1)"
-        ), "sources": [{"id": initial[0]["id"], "title": initial[0]["title"], "page": 1}]}]
+        ), "sources": [{"kind": "document", "id": initial[0]["id"], "title": initial[0]["title"],
+                       "page": 1, "nodes": []}]}]
 
         async def save_history():
             async with client.app.state.db.sessions() as session:

@@ -1,9 +1,10 @@
 <script setup lang="ts">
+import { showError } from '../feedback'
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { api } from './api'
+import { api } from '../api'
 import TagInput from './TagInput.vue'
-import type { OwnExperience } from './experience'
+import type { OwnExperience } from '../experience'
 
 // editing 为空时新建；否则修改本人的草稿。
 const props = defineProps<{ editing?: OwnExperience | null; tagOptions: string[] }>()
@@ -25,7 +26,7 @@ async function save(submit: boolean) {
     ElMessage.success(submit ? '已提交，等待管理员审核' : '草稿已保存，仅自己可见')
     if (!props.editing) { text.value = ''; tags.value = [] }
     emit('saved', saved)
-  } catch (error) { ElMessage.error(error instanceof Error ? error.message : '保存失败') }
+  } catch (error) { showError(error, '保存失败') }
   finally { saving.value = null }
 }
 </script>
@@ -46,5 +47,10 @@ async function save(submit: boolean) {
 </template>
 
 <style scoped>
-.experience-form{display:grid;gap:10px;max-width:760px}.experience-form label{font-size:13px;font-weight:600;margin-top:10px}.experience-form label small{font-weight:400;color:#7c8983;margin-left:8px}.experience-form-actions{display:flex;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap}.experience-form-actions span{margin-right:auto;font-size:12px;color:#7c8983}.experience-form-actions .el-button{margin-left:0}
+.experience-form { display: grid; gap: 10px; min-width: 0; }
+.experience-form label { font-size: var(--fs); font-weight: 600; margin-top: 8px; }
+.experience-form label small { font-weight: 400; font-size: var(--fs-xs); color: var(--text-2); margin-inline-start: 8px; }
+.experience-form-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding-top: 16px; border-top: 1px solid var(--border); }
+.experience-form-actions span { margin-right: auto; font-size: var(--fs-xs); color: var(--text-2); }
+.experience-form-actions .el-button { margin-left: 0; }
 </style>

@@ -170,8 +170,7 @@ def create_app(settings=None, *, agent_factory=create_agent):
 
     @app.get("/api/documents/{document_id}/chunk-preview")
     async def chunk_preview(document_id: str, user: UserDep):
-        require_admin(user, "查看切分预览")
-        preview = await app.state.db.knowledge.preview(document_id)
+        preview = await app.state.db.knowledge.preview(document_id, user.role == "admin")
         if preview is None:
             raise HTTPException(404, "制度不存在")
         return preview
