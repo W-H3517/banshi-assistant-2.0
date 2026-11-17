@@ -239,6 +239,8 @@ uv run --locked python -m backend --log-mode detailed
 
 2026-11-16 重构解析主线并引入逻辑表模型，用户确认舍弃 `rule-cards-v3` 索引：保留原 PDF、文档 ID、账号、登录和会话，从原件重建为 `logical-tables-v4`；旧表 `document_parses`、`chunks` 随替换事务移除。重建前的库备份在 `data/app/refactor-check/banshi-before-v4.sqlite3`。
 
+2026-11-17 标题随正文入块，用户确认舍弃 `logical-tables-v4` 索引：保留原 PDF、文档 ID、账号、登录和会话，用 `backend.reindex` 从原件重建为 `heading-body-v5`。
+
 ## 验证命令
 
 ```powershell
