@@ -40,7 +40,7 @@ def test_ollama_config_needs_no_key(monkeypatch):
         "MODEL_PROVIDER": "ollama", "DEEPSEEK_API_KEY": "deepseek-test"})
     settings = Settings.load()
     assert settings.api_key == "" and settings.model_ready
-    assert settings.conversation_model == "ollama:qwen3.5:4b"
+    assert settings.conversation_model == "ollama:qwen3.5:9b-q8_0"
     assert settings.ollama_base_url == "http://localhost:11434/v1"
     monkeypatch.setenv("OLLAMA_MODEL", "other:14b")
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:9000/v1")

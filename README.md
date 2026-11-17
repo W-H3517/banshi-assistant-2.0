@@ -45,11 +45,11 @@ OPENAI_REASONING_EFFORT=low
 
 ```dotenv
 MODEL_PROVIDER=ollama
-OLLAMA_MODEL=qwen3.5:4b
+OLLAMA_MODEL=qwen3.5:9b-q8_0
 OLLAMA_BASE_URL=http://localhost:11434/v1
 ```
 
-本地模型走Ollama的OpenAI兼容接口，发送`reasoning_effort=none`关闭思考，不携带DeepSeek或OpenAI专有参数。上下文长度由Ollama侧的`OLLAMA_CONTEXT_LENGTH`决定，超出时Ollama会丢弃较早内容且不报错。Ollama未启动时登录和知识库仍可使用，聊天会报模型调用失败。
+本地模型走Ollama的OpenAI兼容接口，发送`reasoning_effort=none`关闭思考，不携带DeepSeek或OpenAI专有参数。上下文长度由Ollama侧的`OLLAMA_CONTEXT_LENGTH`决定，超出时Ollama会丢弃较早内容且不报错。本机（RTX 5070 Ti 16 GB）推荐用户环境变量：`OLLAMA_NUM_PARALLEL=2`、`OLLAMA_CONTEXT_LENGTH=65536`、`OLLAMA_FLASH_ATTENTION=1`、`OLLAMA_KV_CACHE_TYPE=q8_0`，修改后重启Ollama，并用`ollama ps`确认模型完全在GPU上运行。单次搜索可返回约1.2万token，多次搜索加补读容易超过32K。Ollama未启动时登录和知识库仍可使用，聊天会报模型调用失败。
 
 修改`.env`后重启后端并新建会话。云端两个供应商各用自己的密钥；未指定`MODEL_PROVIDER`仍使用DeepSeek。OpenAI模型须显式填写，推理级别应由该模型支持。支持`responses`和`chat_completions`两种OpenAI协议；本轮Sol工具调用使用Responses，发送`store=false`，不携带DeepSeek专有参数。GPT-6.1 Sol支持的推理级别及工具协议以[官方模型迁移说明](https://developers.openai.com/api/docs/guides/latest-model/gpt-6-astra#migration-quickstart)为准。
 
