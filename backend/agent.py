@@ -2,7 +2,7 @@ from typing import Annotated
 
 from pydantic import BeforeValidator, Field
 from pydantic_ai import Agent, CallDeferred, DeferredToolRequests, ModelRetry, RunContext
-from pydantic_ai.messages import ToolReturnPart
+from pydantic_ai.messages import ToolReturnPart, UserPromptPart
 
 from .config import Settings
 from .db import Database
@@ -24,6 +24,7 @@ locate_document_structure（定位文件和结构）。不必每次调用工具�
 搜索同时返回experiences（已发布员工经验），限定制度范围也会查经验。partial表示内容不完整。
 经验署名为某同事，引用用[某同事的经验](citation)。经验与制度冲突时采用经验，同时列出制度原文和经验内容、各带引用，明确提醒“这里按经验处理，与制度某条不同”。
 items带also_in时表示其他文件收录了相同内容，引用时任选其一并可说明另见；带partial时只是段落的一部分。
+items带reused时表示这轮此前已提供相同片段，正文沿用前面的工具结果。
 每份文件的rule_cards在一次对话中只附带一次，rule_cards_sent_before列出前文已提供的文件；回答前检查其适用范围、效力和外部文件指向。
 引用的外部办法未匹配时不能套用国内或其他文件金额；规则卡也不能替代对冲突条件的判断。
 明确文件名、章节或条号时，先用定位工具找到节点，再用正文关键词限定范围搜索。
@@ -53,6 +54,33 @@ def cards_in_history(messages):
             and isinstance(part.content, dict) for card in part.content.get("rule_cards", [])}
 
 
+def fragments_in_current_turn(messages):
+    """只收集最近一次用户提问之后已发送的片段，包含追问暂停前的搜索。"""
+    fragments = set()
+    for message in reversed(messages):
+        for part in reversed(message.parts):
+            if isinstance(part, UserPromptPart):
+                return fragments
+            if (isinstance(part, ToolReturnPart) and part.tool_name == "search_documents"
+                    and isinstance(part.content, dict)):
+                fragments.update((item["node_id"], item["content"])
+                                 for item in part.content.get("items", []) if "content" in item)
+    return fragments
+
+
+def reuse_search_fragments(result, seen_fragments):
+    """省去重复正文，同时保留命中关联、来源、边界和识别提示。"""
+    items = []
+    for item in result["items"]:
+        fragment = (item["node_id"], item["content"])
+        if fragment in seen_fragments:
+            item = {key: value for key, value in item.items() if key != "content"}
+            item["reused"] = True
+        seen_fragments.add(fragment)
+        items.append(item)
+    return {**result, "items": items}
+
+
 def create_agent(settings: Settings, user_id: str, db: Database, *, model=None):
     # 低价模型偶尔会写出不合法的工具参数；允许两次纠正，避免一轮内第二次出错就整轮失败。
     agent = Agent(
@@ -61,6 +89,8 @@ def create_agent(settings: Settings, user_id: str, db: Database, *, model=None):
         model_settings=model_settings(settings, user_id), retries=2,
     )
     sent_cards = set()  # 本次运行内已附带规则卡的文件；同一批并行搜索共用
+    seen_fragments = None
+    search_run_id = None
 
     @agent.tool(strict=False)
     async def search_documents(
@@ -72,6 +102,7 @@ def create_agent(settings: Settings, user_id: str, db: Database, *, model=None):
         同时返回experiences（经验片段），即使限定制度范围也检索经验。
         返回documents（文件id到标题）、items（命中片段）、rule_cards（命中文件的规则原文，
         每份文件一次对话只附带一次）。同段多个子片段合为一组，内容相同的片段只列一条。
+        items中reused=true的命中沿用本轮已返回的正文，引用仍可使用。
         查文件名/章节/条号应使用定位工具。
 
         Args:
@@ -79,11 +110,17 @@ def create_agent(settings: Settings, user_id: str, db: Database, *, model=None):
             document_id: 限定文件，使用先前结果的id字段；不填文件名或node_id，省略则搜索全库。
             node_id: 限定章节或条款子树，使用先前结果的node_id；与document_id同时填写时须属于该文件。
         """
+        nonlocal seen_fragments, search_run_id
         sent_cards.update(cards_in_history(ctx.messages))
         try:
-            return await db.knowledge.search_bundle(queries, document_id, node_id, sent_cards)
+            result = await db.knowledge.search_bundle(queries, document_id, node_id, sent_cards)
         except ValueError as exc:
             raise ModelRetry(str(exc)) from None
+        if seen_fragments is None or search_run_id != ctx.run_id:
+            seen_fragments = fragments_in_current_turn(ctx.messages)
+            search_run_id = ctx.run_id
+        # 结果就绪后同步登记，同一批并行搜索也只发送一份正文。
+        return reuse_search_fragments(result, seen_fragments)
 
     @agent.tool_plain(strict=False)
     async def locate_document_structure(

@@ -392,3 +392,59 @@ async def test_search_question_resume_search_remain_reserved(chat):
         assert any(message.get("tool_call_id") == "ask1" and message["content"] == "是"
                    for message in requests[2]["messages"])
         assert (await current(chat)).transcript[-1]["text"] == "完成"
+
+
+async def test_search_fragments_reused_only_within_current_turn(chat):
+    async def search(queries, *_):
+        await asyncio.sleep(0)
+        items = [{"id": "doc", "node_id": f"node:{node}", "pages": [1],
+                  "citation": "/api/documents/doc#page=1", "content": content}
+                 for node, content in [(1, "固定片段"), (2, "续段" if queries == ["补查"] else "首段")]]
+        return {"items": items, "documents": {"doc": "制度"}, "experiences": [], "rule_cards": []}
+
+    chat.db.knowledge = SimpleNamespace(search_bundle=search)
+    requests = 0
+
+    def handler(request):
+        nonlocal requests
+        requests += 1
+        messages = json.loads(request.content)["messages"]
+        if requests == 1:
+            return sse({"role": "assistant", "tool_calls": [
+                {"index": i, "id": f"search{i}", "type": "function", "function": {
+                    "name": "search_documents", "arguments": json.dumps({"queries": [query]})}}
+                for i, query in enumerate(["初查", "并查"])
+            ]}, "tool_calls")
+        if requests == 2:
+            bundles = [json.loads(message["content"]) for message in messages[-2:]]
+            assert sorted(sum("content" in item for item in b["items"]) for b in bundles) == [0, 2]
+            assert all(item.get("reused") is True for b in bundles for item in b["items"]
+                       if "content" not in item)
+            return tool("ask_question", {"question": "是否外地？"}, "ask")
+        if requests == 3:
+            return tool("search_documents", {"queries": ["补查"]}, "resume")
+        if requests == 5:
+            return tool("search_documents", {"queries": ["初查"]}, "new")
+        fixed, other = json.loads(messages[-1]["content"])["items"]
+        if requests == 4:
+            assert fixed["reused"] is True and "content" not in fixed
+            assert fixed["citation"] == "/api/documents/doc#page=1"
+            assert other["content"] == "续段" and "reused" not in other
+        else:
+            assert requests == 6
+            assert fixed["content"] == "固定片段" and other["content"] == "首段"
+        return sse({"role": "assistant", "content": "完成"})
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
+        model = OpenAIChatModel(chat.settings.model, provider=DeepSeekProvider(
+            api_key="test-key", http_client=client))
+        chat.service.agent_factory = lambda settings, user_id, db: create_agent(
+            settings, user_id, db, model=model)
+        for prompt, answers, status in [("初次提问", {}, "waiting"), ("", {"ask": "是"}, "idle"),
+                                        ("下一轮提问", {}, "idle")]:
+            stream = await chat.service.start(chat.user, chat.conversation.id, prompt, answers)
+            await wait(drain(stream))
+            saved = await current(chat)
+            assert saved.status == status
+            assert saved.transcript[-1]["sources"][0]["nodes"] == ["node:1", "node:2"]
+        assert requests == 6
