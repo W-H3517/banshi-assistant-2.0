@@ -72,6 +72,6 @@ def test_multiple_queries_reserve_candidates_and_rules_have_references(tmp_path)
         assert len({c['id'] for c in result['rule_cards']}) == len(result['rule_cards'])
         refs = [ref for c in result['rule_cards'] for r in c['rules'] for ref in r['references']]
         assert any(r['title'] == '境外经费办法' and r['status'] == 'not_matched' for r in refs)
-        for invalid in ['单个', [], ['重复', '重复'], ['a']*5, [' ', 'b']]:
+        for invalid in ['单个', [], ['重复', '重复'], ['住宿', '订票', '补助', '审批'], [' ', 'b']]:
             with pytest.raises(ValueError):
                 client.portal.call(kb.search_bundle, invalid)

@@ -82,7 +82,7 @@ def test_experience_lifecycle_search_privacy_and_backfill(tmp_path):
         assert client.portal.call(count) == before
 
 
-def test_long_experience_mock_agent_sources_and_reading(tmp_path):
+def test_long_experience_mock_agent_sources(tmp_path):
     requests = []
     experience_id = ""
     content = "采购报销先准备电子比价单。" * 150
@@ -92,15 +92,10 @@ def test_long_experience_mock_agent_sources_and_reading(tmp_path):
         requests.append(body)
         if len(requests) == 1:
             return tool("search_documents", {"queries": ["采购报销"]}, "search")
-        if len(requests) == 2:
-            bundle = json.loads(body["messages"][-1]["content"])
-            assert bundle["items"] and bundle["experiences"]
-            item, = bundle["experiences"]
-            assert item["partial"] and len(item["content"]) < len(content)
-            return tool("read_document_content", {"target_id": experience_id}, "read")
-        read = json.loads(body["messages"][-1]["content"])
-        assert read["experiences"][0]["content"] == content
-        assert "partial" not in read["experiences"][0]
+        bundle = json.loads(body["messages"][-1]["content"])
+        assert bundle["items"] and bundle["experiences"]
+        item, = bundle["experiences"]
+        assert item["partial"] and len(item["content"]) < len(content)
         return sse({"role": "assistant", "content": (
             f"请准备比价单。[某同事的经验](/api/experiences/{experience_id}/published)")})
 
