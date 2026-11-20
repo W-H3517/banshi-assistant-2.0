@@ -28,7 +28,12 @@ const toolLabel: Record<string, string> = {
   search_documents: '搜索正文', locate_document_structure: '定位制度', read_document_content: '读取内容', ask_question: '询问用户',
 }
 const scopeLabel: Record<string, string> = { node: '所选段落', article: '整条条款', neighbors: '相邻段落', page: '原页核对' }
-const examples = ['外地培训回来，报销需要准备什么材料？', '出差住宿的报销限额是多少？', '购买办公用品需要走哪些流程？']
+const examples = [
+  '我要去厦门出差，我是普通员工，和张所一起。要怎么申请，有啥限制，我们能买什么规格的机票和住宿。有没有补助？',
+  '外地培训回来，报销需要准备什么材料？',
+  '出差住宿的报销限额是多少？',
+  '购买办公用品需要走哪些流程？',
+]
 
 const available = (source: Source) =>
   (source.kind === 'experience' ? experiences.availableIds : library.availableIds).includes(source.id)

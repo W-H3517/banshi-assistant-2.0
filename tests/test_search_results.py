@@ -47,7 +47,8 @@ def test_same_content_in_two_files_is_one_hit_and_rule_cards_are_sent_once(tmp_p
         # 交给模型的条目不带模型用不到的 ID 和重复的来源字段，默认状态不输出。
         assert not {"chunk_id", "matched_chunk_ids", "unit_id", "source", "title", "page",
                     "boundary_status", "matched_queries"} & set(item)
-        assert item["path"] == "第一条" and item["citation"].endswith("#page=1")
+        assert "path" not in item and item["content"].startswith("第一条")
+        assert item["citation"].endswith("#page=1")
         assert {c["id"] for c in first["rule_cards"]} == {i["id"] for i in first["items"]} == sent
         assert "rule_cards_sent_before" not in first
         # 同一段对话再次命中这些文件时不再重发规则卡，只说明前文已提供。

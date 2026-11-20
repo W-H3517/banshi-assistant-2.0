@@ -46,7 +46,7 @@ class Settings:
         if provider not in ("deepseek", "openai", "ollama"):
             raise ValueError("MODEL_PROVIDER 必须为 deepseek、openai 或 ollama")
         if provider == "ollama":
-            return cls(model=value("OLLAMA_MODEL", "qwen3.5:4b"), provider=provider, log_mode=log_mode,
+            return cls(model=value("OLLAMA_MODEL", "qwen3.5:9b-q8_0"), provider=provider, log_mode=log_mode,
                        ollama_base_url=value("OLLAMA_BASE_URL", "http://localhost:11434/v1"))
         model = value("OPENAI_MODEL") if provider == "openai" else value("DEEPSEEK_MODEL", "deepseek-flash")
         if not model:

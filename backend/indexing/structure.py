@@ -16,11 +16,13 @@ END_ALL = ("附件：", "附件:")
 END_ITEMS = ("本通知", "特此通知")
 
 
-def source_path(by_id, node):
+def source_path(by_id, node, body_heading_id=None):
     """节点所属的章节路径与条目路径，如 ("第一章总则 / （一）申请材料", "第一条 / 1.凭证")。"""
     chapters, articles = [], []
     while node["parent_id"]:
         node = by_id[node["parent_id"]]
+        if node["id"] == body_heading_id:
+            continue
         if node["kind"] == "chapter":
             chapters.append(node["label"])
         elif node["kind"] == "article":
@@ -48,6 +50,7 @@ def build_structure(sections, tables, title, filename):
                 "content": content, "spans": spans, **extra}
         units.append(unit)
         node["unit_id"], node["length"] = unit["id"], len(content)
+        return unit
 
     def inherit_boundary(node, section):
         node["boundary_status"] = section["boundary_status"]
@@ -86,7 +89,9 @@ def build_structure(sections, tables, title, filename):
             child["warnings"] = [TABLE_WARNING]
             inherit_boundary(child, section)
 
+    pending = None  # 上一段若是独立标题，其阅读单元只留给紧随其后的这一段
     for section in sections:
+        heading, pending = pending, None
         kind, content = section["kind"], section["content"].strip()
         if kind == "document_title":
             continue
@@ -105,7 +110,7 @@ def build_structure(sections, tables, title, filename):
                 formal = None
             item = None
             node = add("chapter", content, structural_parent(), section["pages"])
-            attach(node, "chapter", content, spans)
+            pending = attach(node, "chapter", section["content"], spans)
             headings[level] = node
             continue
         label = article_label(content)
@@ -117,14 +122,30 @@ def build_structure(sections, tables, title, filename):
             item = add("article", label, structural_parent(), section["pages"])
         if label and content == label:
             # 只有条号或编号的一行：正文在随后的段落里，本行只作条目标题。
-            attach(nodes[-1], "article", content, spans)
+            pending = attach(nodes[-1], "article", section["content"], spans)
             continue
-        node = add("paragraph", section["title"], item["id"] if item else structural_parent(),
-                   section["pages"])
-        question = kind == "article" and "？" in section["content"]
-        attach(node, "question_answer" if question else "article_body" if kind == "article"
-               else "paragraph", section["content"], spans,
-               **({"caption_of": section["caption_of"]} if "caption_of" in section else {}))
+        parent_id = item["id"] if item else structural_parent()
+        node = add("paragraph", section["title"], parent_id, section["pages"])
+        body = section["content"]
+        extra = {}
+        if "caption_of" in section:
+            extra["caption_of"] = section["caption_of"]
+        elif label:
+            # 编号与正文同在原文块内，所属标题已经在正文开头。
+            extra["body_heading_id"] = parent_id
+        elif kind == "text" and heading and heading["node_id"] == parent_id:
+            # 独立标题只交给紧随其后、直接挂在其下的段落，保留原文坐标，不跨表格或结构边界拼接。
+            parent = by_id[parent_id]
+            parent["unit_id"], parent["length"] = None, 0
+            prefix = heading["content"] + "\n"
+            body = prefix + body
+            spans = heading["spans"] + [
+                {**span, "start": span["start"] + len(prefix), "end": span["end"] + len(prefix)}
+                for span in spans
+            ]
+            node["pages"] = sorted(set(node["pages"]) | {span["page"] for span in heading["spans"]})
+            extra["body_heading_id"] = parent_id
+        attach(node, "article_body" if kind == "article" else "paragraph", body, spans, **extra)
         inherit_boundary(node, section)
         if any(s.get("confidence") is not None and s["confidence"] < .9 for s in spans):
             node["warnings"] = [LOW_CONFIDENCE]
@@ -137,4 +158,5 @@ def build_structure(sections, tables, title, filename):
             parent["boundary_status"] = node["boundary_status"]
             parent["boundary_reasons"] = list(dict.fromkeys(
                 parent["boundary_reasons"] + node["boundary_reasons"]))
+    units = [unit for unit in units if by_id[unit["node_id"]]["unit_id"] == unit["id"]]
     return {"generation": generation, "filename": filename, "nodes": nodes, "units": units}

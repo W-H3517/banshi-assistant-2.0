@@ -9,7 +9,12 @@ def build_rule_card(structure):
     for unit in structure["units"]:
         if unit["kind"] in ("table", "table_row", "chapter"):
             continue
+        # 并入正文的章标题与独立章标题一样不作规则原文。
+        heading = nodes.get(unit.get("body_heading_id"))
+        skip_first = heading is not None and heading["kind"] == "chapter"
         for match in re.finditer(r"[^\n]+", unit["content"]):
+            if skip_first and match.start() == 0:
+                continue
             text = match[0]
             kinds = []
             if re.search(r"不一致.*为准|同时废止|予以废止|本(?:通知|办法|规定|细则).*(?:施行|实施)", text):

@@ -45,11 +45,11 @@ OPENAI_REASONING_EFFORT=low
 
 ```dotenv
 MODEL_PROVIDER=ollama
-OLLAMA_MODEL=qwen3.5:4b
+OLLAMA_MODEL=qwen3.5:9b-q8_0
 OLLAMA_BASE_URL=http://localhost:11434/v1
 ```
 
-本地模型走Ollama的OpenAI兼容接口，发送`reasoning_effort=none`关闭思考，不携带DeepSeek或OpenAI专有参数。上下文长度由Ollama侧的`OLLAMA_CONTEXT_LENGTH`决定，超出时Ollama会丢弃较早内容且不报错。Ollama未启动时登录和知识库仍可使用，聊天会报模型调用失败。
+本地模型走Ollama的OpenAI兼容接口，发送`reasoning_effort=none`关闭思考，不携带DeepSeek或OpenAI专有参数。上下文长度由Ollama侧的`OLLAMA_CONTEXT_LENGTH`决定，超出时Ollama会丢弃较早内容且不报错。本机（RTX 5070 Ti 16 GB）推荐用户环境变量：`OLLAMA_NUM_PARALLEL=2`、`OLLAMA_CONTEXT_LENGTH=65536`、`OLLAMA_FLASH_ATTENTION=1`、`OLLAMA_KV_CACHE_TYPE=q8_0`，修改后重启Ollama，并用`ollama ps`确认模型完全在GPU上运行。单次搜索可返回约1.2万token，多次搜索加补读容易超过32K。Ollama未启动时登录和知识库仍可使用，聊天会报模型调用失败。
 
 修改`.env`后重启后端并新建会话。云端两个供应商各用自己的密钥；未指定`MODEL_PROVIDER`仍使用DeepSeek。OpenAI模型须显式填写，推理级别应由该模型支持。支持`responses`和`chat_completions`两种OpenAI协议；本轮Sol工具调用使用Responses，发送`store=false`，不携带DeepSeek专有参数。GPT-6.1 Sol支持的推理级别及工具协议以[官方模型迁移说明](https://developers.openai.com/api/docs/guides/latest-model/gpt-6-astra#migration-quickstart)为准。
 
@@ -239,6 +239,8 @@ uv run --locked python -m backend --log-mode detailed
 
 2026-11-16 重构解析主线并引入逻辑表模型，用户确认舍弃 `rule-cards-v3` 索引：保留原 PDF、文档 ID、账号、登录和会话，从原件重建为 `logical-tables-v4`；旧表 `document_parses`、`chunks` 随替换事务移除。重建前的库备份在 `data/app/refactor-check/banshi-before-v4.sqlite3`。
 
+2026-11-17 标题随正文入块，用户确认舍弃 `logical-tables-v4` 索引：保留原 PDF、文档 ID、账号、登录和会话，用 `backend.reindex` 从原件重建为 `heading-body-v5`。
+
 ## 验证命令
 
 ```powershell
@@ -279,7 +281,7 @@ git diff --check
 
 ### 结构与索引版本
 
-当前索引版本为 `logical-tables-v4`。解析与索引是单向流水线：页面块 → 版面识别 → 连续段落 → 逻辑表 → 结构树与阅读单元 → 检索片段 → 规则卡；章节与条款层级只在构建结构树时推导一次。正文只在阅读单元中保存一份，逐字坐标仅用于计算高亮、不入库；检索和定位只读取结构节点，阅读时才按文档读取正文、表格或原页块。效力段与尾部落款分开，落款和封面信息原页保留但不检索；标题结合字号和版面识别，问答标签取问题至问号。缩进分段保留所属条款，问答跨页连续。
+当前索引版本为 `heading-body-v5`。解析与索引是单向流水线：页面块 → 版面识别 → 连续段落 → 逻辑表 → 结构树与阅读单元 → 检索片段 → 规则卡；章节与条款层级只在构建结构树时推导一次。正文只在阅读单元中保存一份，逐字坐标仅用于计算高亮、不入库；检索和定位只读取结构节点，阅读时才按文档读取正文、表格或原页块。效力段与尾部落款分开，落款和封面信息原页保留但不检索；最近一级标题随直接引出的正文入块一次并保留原文坐标，已入正文的标题不再显示在检索路径中；结构树仍保留标题供定位和补读。缩进分段保留所属条款，编号条目跨页连续。
 
 表格按逻辑表保存：段落序列中紧邻、位于相邻页且列边界一致的片段合并为一张表，表头路径、单位和表头单元格只存一次，每行保留来源页与单元格坐标；续页重复打印的表头不作数据行。表头行数由顶部合并单元格决定（纵向合并格占满表头，有文字的横向合并格之下至少还有一行子表头），且不越过首个含纯数字单元格的行。只展开实际合并的单元格，空白不向下填充。分页截断的合并单元格在续页显示为空白时，仅延续行首连续空白的行标识列——该列此前每一数据行都有值，且除首列序号外不是数值列——并记录原始空值与继承来源；金额等数值列和本来就有空白的列从不填充。以上均为通用规则，不依赖具体表名或字段名。仅识别有框线的文字表格，无框线表格和扫描页表格仍按普通文字处理。边界确认不代表OCR/表头解释已经人工审核，也不保证远处例外已全部找到。
 

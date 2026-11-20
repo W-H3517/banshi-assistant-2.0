@@ -61,12 +61,13 @@ def build_chunks(structure, tables, pages, title, embeddings):
         if unit["kind"] in NOT_INDEXED or "caption_of" in unit:
             continue
         node = by_id[unit["node_id"]]
-        chapter, article = source_path(by_id, node)
         table, row = rows[unit["table_ref"]["table"], unit["table_ref"]["row"]] \
             if unit["kind"] == "table_row" else (None, None)
         parts = embeddings.split(row_retrieval_text(table, row) if row else unit["content"])
         for part in parts:
             start, end = part["start"], part["end"]
+            # 标题只在正文开头：只有首个片段可省去路径中的该标题，拆出的后续片段仍需路径。
+            chapter, article = source_path(by_id, node, unit.get("body_heading_id") if start == 0 else None)
             if row:
                 regions, status = row_regions(row, pages)
                 chunk_pages = [row["page"]]
