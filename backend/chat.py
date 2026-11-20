@@ -242,7 +242,7 @@ class ChatService:
             None if answers else prompt,
             message_history=ModelMessagesTypeAdapter.validate_python(conversation.history),
             deferred_tool_results=DeferredToolResults(calls=answers) if answers else None,
-            event_stream_handler=events, usage=usage, usage_limits=UsageLimits(request_limit=8),
+            event_stream_handler=events, usage=usage, usage_limits=UsageLimits(),
             conversation_id=conversation.id,
             metadata={"conversation_id": conversation.id, "user_id": user.id},
             capabilities=[Instrumentation(settings=self.instrumentation)]
