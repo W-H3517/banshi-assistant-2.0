@@ -8,6 +8,7 @@ from backend.db import DocumentIndex
 from backend.embeddings import LocalEmbeddings
 from backend.indexing import prepare_document
 from backend.indexing.chunks import build_chunks
+from backend.indexing.rules import build_rule_card
 from backend.indexing.structure import build_structure, source_path
 from backend.parsing.sections import assemble_document
 from tests.pdf_helpers import make_pdf, text_sections
@@ -78,6 +79,34 @@ def test_nested_headings_keep_article_and_do_not_leak_to_next_article():
         '第二条 应当留档。': ('第一章总则', '第二条'),
         '1.标准。费用不得超过限额。': ('第二章费用', '1.标准'),
     }
+
+
+def test_split_body_keeps_heading_path_after_first_part():
+    embeddings = LocalEmbeddings(Settings().model_cache_dir)
+    body = '申请人应当提交完整凭证并经部门负责人审核签字后办理报销。' * 40
+    raw = make_pdf(['报销办法\n第一章 总则\n第一条\n' + body])
+    chunks = prepare_document(raw, '费用制度.pdf', embeddings, None)[1]['chunks']
+    assert len(chunks) > 1
+    assert chunks[0]['content'].startswith('第一条') and chunks[0]['source']['article'] == ''
+    for chunk in chunks[1:]:
+        assert not chunk['content'].startswith('第一条')
+        assert chunk['source'] == {**chunks[0]['source'], 'article': '第一条'}
+
+
+def test_heading_joins_only_the_paragraph_right_after_it():
+    sections = text_sections(['第一章 总则', '表一 费用标准', '员工出差应事先申请。'])
+    sections[1]['caption_of'] = 'table-1'
+    structure = build_structure(sections, [], '办法', '办法.pdf')
+    units = {u['content']: u for u in structure['units']}
+    assert units['第一章 总则']['kind'] == 'chapter'
+    assert 'body_heading_id' not in units['员工出差应事先申请。']
+
+
+def test_chapter_heading_in_body_is_not_a_rule():
+    structure = build_structure(text_sections(['第一章 适用范围', '本办法适用于全体员工。']),
+                                [], '办法', '办法.pdf')
+    assert structure['units'][0]['content'] == '第一章 适用范围\n本办法适用于全体员工。'
+    assert [r['content'] for r in build_rule_card(structure)['rules']] == ['本办法适用于全体员工。']
 
 
 def test_old_index_is_rejected_without_migration(tmp_path):
