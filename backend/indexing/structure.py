@@ -35,7 +35,6 @@ def build_structure(sections, tables, title, filename):
     nodes, units, by_id = [], [], {}
     tables = {table["id"]: table for table in tables}
     table_nodes = {}
-    heading_units = {}
 
     def add(kind, label, parent=None, pages=()):
         node = {"id": f"{generation}:{len(nodes)}", "kind": kind, "label": label,
@@ -52,9 +51,6 @@ def build_structure(sections, tables, title, filename):
         units.append(unit)
         node["unit_id"], node["length"] = unit["id"], len(content)
         return unit
-
-    def attach_heading(node, content, spans):
-        heading_units[node["id"]] = attach(node, node["kind"], content, spans)
 
     def inherit_boundary(node, section):
         node["boundary_status"] = section["boundary_status"]
@@ -93,7 +89,9 @@ def build_structure(sections, tables, title, filename):
             child["warnings"] = [TABLE_WARNING]
             inherit_boundary(child, section)
 
+    pending = None  # 上一段若是独立标题，其阅读单元只留给紧随其后的这一段
     for section in sections:
+        heading, pending = pending, None
         kind, content = section["kind"], section["content"].strip()
         if kind == "document_title":
             continue
@@ -112,7 +110,7 @@ def build_structure(sections, tables, title, filename):
                 formal = None
             item = None
             node = add("chapter", content, structural_parent(), section["pages"])
-            attach_heading(node, section["content"], spans)
+            pending = attach(node, "chapter", section["content"], spans)
             headings[level] = node
             continue
         label = article_label(content)
@@ -124,7 +122,7 @@ def build_structure(sections, tables, title, filename):
             item = add("article", label, structural_parent(), section["pages"])
         if label and content == label:
             # 只有条号或编号的一行：正文在随后的段落里，本行只作条目标题。
-            attach_heading(nodes[-1], section["content"], spans)
+            pending = attach(nodes[-1], "article", section["content"], spans)
             continue
         parent_id = item["id"] if item else structural_parent()
         node = add("paragraph", section["title"], parent_id, section["pages"])
@@ -135,8 +133,8 @@ def build_structure(sections, tables, title, filename):
         elif label:
             # 编号与正文同在原文块内，所属标题已经在正文开头。
             extra["body_heading_id"] = parent_id
-        elif kind == "text" and (heading := heading_units.pop(parent_id, None)):
-            # 独立标题只交给直接引出的第一段，保留原文坐标，不跨结构边界拼接。
+        elif kind == "text" and heading and heading["node_id"] == parent_id:
+            # 独立标题只交给紧随其后、直接挂在其下的段落，保留原文坐标，不跨表格或结构边界拼接。
             parent = by_id[parent_id]
             parent["unit_id"], parent["length"] = None, 0
             prefix = heading["content"] + "\n"
