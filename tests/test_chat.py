@@ -396,6 +396,7 @@ async def test_search_question_resume_search_remain_reserved(chat):
 
 async def test_search_fragments_reused_only_within_current_turn(chat):
     async def search(queries, *_):
+        assert queries != ["并查"]
         await asyncio.sleep(0)
         items = [{"id": "doc", "node_id": f"node:{node}", "pages": [1],
                   "citation": "/api/documents/doc#page=1", "content": content}
@@ -416,10 +417,11 @@ async def test_search_fragments_reused_only_within_current_turn(chat):
                 for i, query in enumerate(["初查", "并查"])
             ]}, "tool_calls")
         if requests == 2:
-            bundles = [json.loads(message["content"]) for message in messages[-2:]]
-            assert sorted(sum("content" in item for item in b["items"]) for b in bundles) == [0, 2]
-            assert all(item.get("reused") is True for b in bundles for item in b["items"]
-                       if "content" not in item)
+            result, skipped = messages[-2:]
+            assert [item["content"] for item in json.loads(result["content"])["items"]] == [
+                "固定片段", "首段"]
+            assert skipped["tool_call_id"] == "search1"
+            assert "只执行第一个搜索调用" in skipped["content"]
             return tool("ask_question", {"question": "是否外地？"}, "ask")
         if requests == 3:
             return tool("search_documents", {"queries": ["补查"]}, "resume")

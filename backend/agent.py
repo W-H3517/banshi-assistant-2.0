@@ -2,7 +2,7 @@ from typing import Annotated
 
 from pydantic import BeforeValidator, Field
 from pydantic_ai import Agent, CallDeferred, DeferredToolRequests, ModelRetry, RunContext
-from pydantic_ai.messages import ToolReturnPart, UserPromptPart
+from pydantic_ai.messages import ToolCallPart, ToolReturnPart, UserPromptPart
 
 from .config import Settings
 from .db import Database
@@ -15,9 +15,8 @@ SearchQueries = Annotated[list[SearchText], Field(min_length=1, max_length=MAX_S
                           BeforeValidator(lambda value: [value] if isinstance(value, str) else value)]
 
 INSTRUCTIONS = """你是部门办事助手。根据用户问题自主决定直接回答、问问题或查资料。
-有三个工具：ask_question（问问题）、search_documents（搜索正文）、
-locate_document_structure（定位文件和结构）。不必每次调用工具。
-每次搜索的queries放1至3个查询。先查最直接相关的事项，核对结果后再补查仍缺依据的事项。
+可用工具为 ask_question（问问题）和 search_documents（搜索正文）。不必每次调用工具。
+每次模型响应最多调用一次search_documents，queries放1至4个查询。先查最直接相关的事项，核对结果后再补查仍缺依据的事项。
 至少一条查询保留用户问题里决定适用范围的具体条件，例如地区、类别、费用承担方或所涉费用组合。
 单查询最多六组命中，多个查询轮流合并去重，合计最多为查询数的五倍；不要把参考答案或臆测金额写入查询。
 搜索items不是整条依据；文件名、章节、条号不拼入正文检索。items的id对应documents中的文件标题。
@@ -27,12 +26,10 @@ items带also_in时表示其他文件收录了相同内容，引用时任选其�
 items带reused时表示这轮此前已提供相同片段，正文沿用前面的工具结果。
 每份文件的rule_cards在一次对话中只附带一次，rule_cards_sent_before列出前文已提供的文件；回答前检查其适用范围、效力和外部文件指向。
 引用的外部办法未匹配时不能套用国内或其他文件金额；规则卡也不能替代对冲突条件的判断。
-明确文件名、章节或条号时，先用定位工具找到节点，再用正文关键词限定范围搜索。
-定位 query 留空可列出文件；传 parent_id 且 query 留空可逐层查看目录。
-同名文件或同号条款应结合路径判断；无法确定时询问用户，不擅自选择。
+优先使用正文关键词检索。已有可靠的文件或节点 ID 时，可限定检索范围；同名文件或同号条款应结合文件和路径判断。
 需要确认影响结论的条件时调用 ask_question，问题要简短，可给选项，用户也可自由回答。
 用户已明确给出的条件不重复询问；材料缺失不能靠追问用户事实来代替。用户要求不追问时，说明缺失依据和结论范围。
-涉及制度、材料、步骤、限额时必须查资料；使用具体问题或关键词检索，必要时换说法或定位后限定范围搜索。
+涉及制度、材料、步骤、限额时必须查资料；使用具体问题或关键词检索，必要时换说法或限定范围搜索。
 先核对已经取得的证据，只补查尚缺的条件或原文。依据已经齐全时结束查阅；问题限定在库内且已明确指向未入库办法时，说明缺失即可。
 片段中的文件、章节和条目字段表示所属来源；引用时优先指明已有章节和条号，不补造缺失层级。
 问题需要的席别、金额或其他字段在表格里时，搜索对应行并核对字段、单位和解析警告。
@@ -88,29 +85,34 @@ def create_agent(settings: Settings, user_id: str, db: Database, *, model=None):
         output_type=[str, DeferredToolRequests], instructions=INSTRUCTIONS,
         model_settings=model_settings(settings, user_id), retries=2,
     )
-    sent_cards = set()  # 本次运行内已附带规则卡的文件；同一批并行搜索共用
+    sent_cards = set()  # 本次运行内已附带规则卡的文件
     seen_fragments = None
     search_run_id = None
 
-    @agent.tool(strict=False)
+    @agent.tool(strict=False, sequential=True)
     async def search_documents(
         ctx: RunContext, queries: SearchQueries, document_id: str | None = None,
         node_id: str | None = None,
     ) -> dict:
-        """按1至3个查询混合检索正文；可限定文档或结构节点。
+        """按1至4个查询混合检索正文；可限定文档或结构节点。每次模型响应最多调用一次。
 
         同时返回experiences（经验片段），即使限定制度范围也检索经验。
         返回documents（文件id到标题）、items（命中片段）、rule_cards（命中文件的规则原文，
         每份文件一次对话只附带一次）。同段多个子片段合为一组，内容相同的片段只列一条。
         items中reused=true的命中沿用本轮已返回的正文，引用仍可使用。
-        查文件名/章节/条号应使用定位工具。
 
         Args:
-            queries: 查询数组，1至3个互不相同的业务问题；只有一个问题也写成单元素数组。每个1至300字，不填臆测答案。
+            queries: 查询数组，1至4个互不相同的业务问题；只有一个问题也写成单元素数组。每个1至300字，不填臆测答案。
             document_id: 限定文件，使用先前结果的id字段；不填文件名或node_id，省略则搜索全库。
             node_id: 限定章节或条款子树，使用先前结果的node_id；与document_id同时填写时须属于该文件。
         """
         nonlocal seen_fragments, search_run_id
+        first_search = next(
+            part for part in ctx.messages[-1].parts
+            if isinstance(part, ToolCallPart) and part.tool_name == "search_documents"
+        )
+        if first_search.tool_call_id != ctx.tool_call_id:
+            raise ModelRetry("每次模型响应只执行第一个搜索调用。先核对其结果，下一次再补查。")
         sent_cards.update(cards_in_history(ctx.messages))
         try:
             result = await db.knowledge.search_bundle(queries, document_id, node_id, sent_cards)
@@ -119,29 +121,7 @@ def create_agent(settings: Settings, user_id: str, db: Database, *, model=None):
         if seen_fragments is None or search_run_id != ctx.run_id:
             seen_fragments = fragments_in_current_turn(ctx.messages)
             search_run_id = ctx.run_id
-        # 结果就绪后同步登记，同一批并行搜索也只发送一份正文。
         return reuse_search_fragments(result, seen_fragments)
-
-    @agent.tool_plain(strict=False)
-    async def locate_document_structure(
-        query: Annotated[str, Field(max_length=300)] = "", document_id: str | None = None,
-        parent_id: str | None = None, cursor: str | None = None,
-    ) -> dict:
-        """定位文件名、章节或条号，保留重名候选；不搜索正文。
-
-        query和parent_id均留空列文件；指定 parent_id 且 query 留空列直接子节点。
-        指定 query 时查范围内结构名称，可用空格分隔关键词。分页使用 next_cursor。
-
-        Args:
-            query: 文件名、章节名、条号或问题标题关键词，最多300字；不用于搜索正文。
-            document_id: 文件id，可限定定位范围；仅传此参数且query为空仍返回文件节点。
-            parent_id: 已返回的node_id；query为空时列其直接子节点，否则搜索其结构子树。
-            cursor: 上次返回的next_cursor；续页时保持其余参数不变，首次省略。
-        """
-        try:
-            return await db.knowledge.locate(query, document_id, parent_id, cursor)
-        except ValueError as exc:
-            raise ModelRetry(str(exc)) from None
 
     @agent.tool_plain(strict=False)
     async def ask_question(question: str, options: list[str] | None = None) -> str:

@@ -100,7 +100,7 @@ async def test_openai_tool_roundtrip_has_no_deepseek_parameters(api, tool_name):
         assert "thinking" not in body and "user_id" not in body and body["store"] is False
         schemas = body["tools"] if api == "responses" else [t["function"] for t in body["tools"]]
         assert {t["name"] for t in schemas} == {
-            "search_documents", "locate_document_structure", "ask_question"}
+            "search_documents", "ask_question"}
         assert all(t.get("strict", False) is False for t in schemas)
         arguments = {"queries": ["住宿限额", "凭据报销"]} if tool_name == "search_documents" else {"question": "是否已获审批人同意？"}
         if len(requests) == 2:

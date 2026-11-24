@@ -151,7 +151,7 @@ def test_table_rows_keep_fields_and_read_separately(app_client):
     assert whole["items"][0]["table"]["row_count"] == 2 and whole["reading_complete"]
 
 
-def test_agent_locate_search_and_sources(tmp_path):
+def test_agent_search_and_sources(tmp_path):
     requests, clients = [], []
 
     def handler(request):
@@ -159,12 +159,10 @@ def test_agent_locate_search_and_sources(tmp_path):
         requests.append(body)
         if len(requests) == 1:
             names = {t["function"]["name"] for t in body["tools"]}
-            assert names == {"ask_question", "search_documents", "locate_document_structure"}
-            return tool("locate_document_structure", {"query": "差旅"}, "locate1")
+            assert names == {"ask_question", "search_documents"}
+            assert "locate_document_structure" not in json.dumps(body["messages"])
+            return tool("search_documents", {"queries": ["酒店预算上限"]}, "search1")
         previous = json.loads(body["messages"][-1]["content"])
-        if len(requests) == 2:
-            return tool("search_documents", {"queries": ["酒店预算上限"],
-                                             "document_id": previous["items"][0]["id"]}, "search1")
         assert any("450" in i["content"] for i in previous["items"])
         assert "rule_cards" in previous
         return sse({"role": "assistant", "content": "模拟标准为450元。"})
@@ -183,14 +181,13 @@ def test_agent_locate_search_and_sources(tmp_path):
         assert '"type": "done"' in response.text, response.text
         message = client.get(path).json()["transcript"][-1]
         assert message["sources"] and all(t["status"] == "done" for t in message["tools"])
-        assert [t["name"] for t in message["tools"]] == ["locate_document_structure", "search_documents"]
+        assert [t["name"] for t in message["tools"]] == ["search_documents"]
         # 来源按文件和页合并，并记录本轮命中的段落，供证据栏高亮。
         documents = [s for s in message["sources"] if s["kind"] == "document"]
         assert len({(s["id"], s["page"]) for s in documents}) == len(documents)
         assert any(s["nodes"] for s in documents)
         # 工具调用带查询内容和结果摘要，供界面展示检索过程。
-        locate, search = message["tools"]
-        assert "total" in locate["result"]
+        search, = message["tools"]
         assert search["input"]["queries"] and set(search["result"]) == {"items", "documents", "experiences"}
         for transport in clients:
             client.portal.call(transport.aclose)
@@ -233,7 +230,7 @@ def test_search_rule_card_page_is_added_to_chat_sources(tmp_path):
 
 
 @pytest.mark.parametrize("arguments", [
-    '{"queries": []}', '{"queries": [差旅补助]}', '{"queries": ["住宿", "订票", "补助", "审批"]}',
+    '{"queries": []}', '{"queries": [差旅补助]}', '{"queries": ["住宿", "订票", "补助", "审批", "舱位"]}',
 ])
 def test_invalid_search_arguments_retry_without_becoming_sources(tmp_path, arguments):
     requests, clients = [], []
@@ -245,7 +242,7 @@ def test_invalid_search_arguments_retry_without_becoming_sources(tmp_path, argum
             # 查询只有数组一种写法，不让模型在字符串和数组之间选择。
             query = body["tools"][0]["function"]["parameters"]["properties"]["queries"]
             assert query["description"] and query["type"] == "array" and "anyOf" not in query
-            assert (query["minItems"], query["maxItems"]) == (1, 3)
+            assert (query["minItems"], query["maxItems"]) == (1, 4)
             return sse({"role": "assistant", "tool_calls": [{"index": 0, "id": "invalid-search",
                         "type": "function", "function": {"name": "search_documents",
                                                            "arguments": arguments}}]}, "tool_calls")

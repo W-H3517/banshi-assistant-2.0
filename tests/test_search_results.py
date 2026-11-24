@@ -41,10 +41,11 @@ async def test_agent_batch_budget_shares_slots_between_queries():
     kb.rule_cards = AsyncMock(return_value=[])
     single = await kb.search_bundle(["住宿"])
     assert len(single["items"]) == 6
-    batch = await kb.search_bundle(["住宿", "订票", "补助"])
-    assert len(batch["items"]) == 15
-    assert [item["id"] for item in batch["items"][:3]] == ["住宿", "订票", "补助"]
-    assert [result["returned"] for result in batch["query_results"]] == [5, 5, 5]
+    queries = ["住宿", "订票", "补助", "审批"]
+    batch = await kb.search_bundle(queries)
+    assert len(batch["items"]) == 20
+    assert [item["id"] for item in batch["items"][:4]] == queries
+    assert [result["returned"] for result in batch["query_results"]] == [5, 5, 5, 5]
 
 
 def test_same_content_in_two_files_is_one_hit_and_rule_cards_are_sent_once(tmp_path):

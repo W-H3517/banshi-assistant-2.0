@@ -17,7 +17,7 @@ jieba.setLogLevel(logging.WARNING)
 STOP_WORDS = {"的", "了", "和", "是", "在", "要", "有", "我", "你", "请", "什么", "哪些", "怎么",
               "如何", "是否", "可以", "需要", "多少", "一个", "这个", "进行", "关于"}
 MAX_RESULTS = 6
-MAX_SEARCH_QUERIES = 3
+MAX_SEARCH_QUERIES = 4
 BATCH_RESULTS_PER_QUERY = 5
 RANK_DEPTH = 20  # 每路排名参与融合的阅读单元数
 # 这是候选召回阈值，不是“有制度依据”的判定；由 Agent 核对片段是否支持结论。
@@ -176,7 +176,7 @@ class Search:
                       key=lambda i: (-scores[rows[i].node_id], -float(similarities[i]), i))
 
     async def search_bundle(self, queries, document_id=None, node_id=None, sent_cards=None):
-        """Agent 用的检索：1 至 3 个查询轮流合并，返回精简条目和尚未提供过的规则卡。
+        """Agent 用的检索：最多四个查询轮流合并，返回精简条目和尚未提供过的规则卡。
 
         sent_cards 是本次对话已提供过规则卡的文件 ID 集合，会就地补入本次新提供的文件。
         """
