@@ -17,6 +17,8 @@ jieba.setLogLevel(logging.WARNING)
 STOP_WORDS = {"的", "了", "和", "是", "在", "要", "有", "我", "你", "请", "什么", "哪些", "怎么",
               "如何", "是否", "可以", "需要", "多少", "一个", "这个", "进行", "关于"}
 MAX_RESULTS = 6
+MAX_SEARCH_QUERIES = 4
+BATCH_RESULTS_PER_QUERY = 5
 RANK_DEPTH = 20  # 每路排名参与融合的阅读单元数
 # 这是候选召回阈值，不是“有制度依据”的判定；由 Agent 核对片段是否支持结论。
 MIN_SIMILARITY = 0.40
@@ -174,12 +176,12 @@ class Search:
                       key=lambda i: (-scores[rows[i].node_id], -float(similarities[i]), i))
 
     async def search_bundle(self, queries, document_id=None, node_id=None, sent_cards=None):
-        """Agent 用的检索：1 至 4 个查询轮流合并，返回精简条目和尚未提供过的规则卡。
+        """Agent 用的检索：最多四个查询轮流合并，返回精简条目和尚未提供过的规则卡。
 
         sent_cards 是本次对话已提供过规则卡的文件 ID 集合，会就地补入本次新提供的文件。
         """
-        if not isinstance(queries, list) or not 1 <= len(queries) <= 4:
-            raise ValueError("搜索须提供1至4个查询")
+        if not isinstance(queries, list) or not 1 <= len(queries) <= MAX_SEARCH_QUERIES:
+            raise ValueError(f"搜索须提供1至{MAX_SEARCH_QUERIES}个查询")
         if any(not isinstance(q, str) or not q.strip() or len(q) > 300 for q in queries):
             raise ValueError("每个查询须为1至300字")
         queries = [q.strip() for q in queries]
@@ -187,18 +189,19 @@ class Search:
             raise ValueError("查询不能重复")
         groups = [await self.search(q, document_id, node_id) for q in queries]
         selected, marks = {}, {}
-        limit = MAX_RESULTS * len(queries)
+        # 限制送给模型的条目总数。重复命中让出的名额仍可用来补充其他证据。
+        limit = MAX_RESULTS if len(queries) == 1 else BATCH_RESULTS_PER_QUERY * len(queries)
         # 轮流取每个查询的候选，避免一个子问题挤掉其他子问题；内容相同的只保留先取到的一条。
         for rank in range(MAX_RESULTS):
             for hits in groups:
-                if rank < len(hits) and len(selected) < limit:
+                if rank < len(hits):
                     hit = hits[rank]
                     if marks.setdefault(fingerprint(hit["content"]), hit["node_id"]) == hit["node_id"]:
                         selected.setdefault(hit["node_id"], dict(hit))
-        for key, item in selected.items():
+        hits = list(selected.values())[:limit]
+        for item in hits:
             item["matched_queries"] = [i for i, hits in enumerate(groups)
-                                       if any(h["node_id"] == key for h in hits)]
-        hits = list(selected.values())
+                                        if any(h["node_id"] == item["node_id"] for h in hits)]
         documents = {hit["id"]: hit["title"] for hit in hits}
         sent_cards = set() if sent_cards is None else sent_cards
         fresh = {key: title for key, title in documents.items() if key not in sent_cards}
@@ -230,7 +233,9 @@ class Search:
                 DocumentIndex.document_id, DocumentIndex.rules,
             ).where(DocumentIndex.document_id.in_(ids)))).all())
         return [{"id": key, "title": title, "note": cards[key]["note"],
-                 "rules": [{**rule, "id": key, "title": title, "page": rule["pages"][0],
+                "rules": [{**{field: rule[field] for field in (
+                    "kinds", "content", "node_id", "pages", "boundary_status", "scope_path",
+                )}, "id": key, "title": title,
                             "citation": f"/api/documents/{key}#page={rule['pages'][0]}",
                             "references": [match_reference(name, library)
                                            for name in rule["references"]]}

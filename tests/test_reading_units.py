@@ -107,6 +107,8 @@ def test_unknown_boundary_is_not_complete_and_raw_page_is_available(tmp_path):
         result = client.portal.call(kb.read, target)
         assert result["pagination_complete"] and not result["reading_complete"]
         assert result["boundary_status"] == "uncertain" and result["missing_or_uncertain_parts"]
+        assert result["verification_hint"]["pages"] == [1]
+        assert result["items"][0]["boundary_reasons"]
         assert "complete" not in result
         raw = client.portal.call(kb.read, target, "page", 1, None, 1)
         assert raw["pagination_complete"] and not raw["reading_complete"]

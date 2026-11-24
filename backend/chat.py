@@ -43,7 +43,7 @@ def detail(conversation):
 
 
 SHOWN_ARGS = {"search_documents": ("queries",), "locate_document_structure": ("query",),
-              "read_document_content": ("scope", "page"), "ask_question": ("question",)}
+              "ask_question": ("question",)}
 
 
 def tool_input(name, args):
@@ -57,12 +57,7 @@ def tool_summary(name, content):
         return {key: len(content[key]) for key in ("items", "documents", "experiences")}
     if name == "locate_document_structure":
         return {"total": content["total"]}
-    if name == "ask_question":
-        return {"answer": content}  # 恢复执行时的结果就是用户的回答
-    if "experiences" in content:
-        return {"experience": "、".join(content["experiences"][0]["tags"])}
-    return {"title": content["target"]["title"], "path": content["target"]["path"],
-            "pages": sorted({page for item in content["items"] for page in item["pages"]})}
+    return {"answer": content}  # 追问恢复时工具结果就是用户的回答
 
 
 class ChatService:
@@ -223,27 +218,20 @@ class ChatService:
                             if succeeded:
                                 tool["result"] = tool_summary(tool["name"], event.part.content)
                             queue.put_nowait({"type": "tool", **tool})
-                    if succeeded and event.part.tool_name in {
-                        "search_documents", "read_document_content",
-                    }:
+                    if succeeded and event.part.tool_name == "search_documents":
                         content = event.part.content
-                        titles = {}
-                        if isinstance(content, dict):
-                            for item in content.get("experiences", []):
-                                source = {"id": item["id"], "kind": "experience",
-                                          "title": "某同事的经验 · " + "、".join(item["tags"])}
-                                if source not in assistant["sources"]:
-                                    assistant["sources"].append(source)
-                                    queue.put_nowait({"type": "source", **source})
-                            # 搜索条目的标题在 documents 中只列一次；阅读条目和规则自带标题。
-                            titles = content.get("documents", {})
-                            content = content.get("items", []) + [rule for card in content.get("rule_cards", [])
-                                                                  for rule in card["rules"]]
-                        if isinstance(content, list):
-                            for doc in content:
-                                for page in doc.get("pages", [doc.get("page")]):
-                                    cite(doc["id"], page, doc.get("title") or titles[doc["id"]],
-                                         doc.get("node_id"))
+                        for item in content["experiences"]:
+                            source = {"id": item["id"], "kind": "experience",
+                                      "title": "某同事的经验 · " + "、".join(item["tags"])}
+                            if source not in assistant["sources"]:
+                                assistant["sources"].append(source)
+                                queue.put_nowait({"type": "source", **source})
+                        titles = content["documents"]
+                        rules = [rule for card in content.get("rule_cards", []) for rule in card["rules"]]
+                        for doc in content["items"] + rules:
+                            for page in doc.get("pages", [doc.get("page")]):
+                                cite(doc["id"], page, doc.get("title") or titles[doc["id"]],
+                                     doc.get("node_id"))
                 if text:
                     assistant["text"] += text
                     queue.put_nowait({"type": "delta", "text": text})
@@ -254,7 +242,7 @@ class ChatService:
             None if answers else prompt,
             message_history=ModelMessagesTypeAdapter.validate_python(conversation.history),
             deferred_tool_results=DeferredToolResults(calls=answers) if answers else None,
-            event_stream_handler=events, usage=usage, usage_limits=UsageLimits(request_limit=8),
+            event_stream_handler=events, usage=usage, usage_limits=UsageLimits(),
             conversation_id=conversation.id,
             metadata={"conversation_id": conversation.id, "user_id": user.id},
             capabilities=[Instrumentation(settings=self.instrumentation)]

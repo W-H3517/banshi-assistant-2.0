@@ -1,5 +1,6 @@
 import json
 from io import BytesIO
+from unittest.mock import AsyncMock
 
 import httpx2
 from fastapi.testclient import TestClient
@@ -13,6 +14,7 @@ from reportlab.pdfgen.canvas import Canvas
 from backend.agent import cards_in_history, create_agent
 from backend.app import create_app
 from backend.config import Settings
+from backend.knowledge.search import Search
 from tests.pdf_helpers import make_pdf
 from tests.test_app import login, sse, tool
 from tests.test_ocr import fake_recognizer
@@ -22,6 +24,28 @@ def upload(client, name, raw):
     response = client.post("/api/documents", files={"file": (name, raw)})
     assert response.status_code == 201, response.text
     return response.json()["id"]
+
+
+async def test_agent_batch_budget_shares_slots_between_queries():
+    def hits(query):
+        return [{"id": query, "title": query, "node_id": f"{query}:{rank}", "pages": [1],
+                 "citation": f"/api/documents/{query}#page=1",
+                 "source": {"chapter": "", "article": ""}, "article_id": None,
+                 "kind": "paragraph", "excerpt_complete": True, "boundary_status": "confirmed",
+                 "warnings": [], "also_in": [], "content": f"{query}第{rank}段"}
+                for rank in range(6)]
+
+    kb = Search()
+    kb.search = AsyncMock(side_effect=lambda query, *_: hits(query))
+    kb.search_experiences = AsyncMock(return_value=[])
+    kb.rule_cards = AsyncMock(return_value=[])
+    single = await kb.search_bundle(["住宿"])
+    assert len(single["items"]) == 6
+    queries = ["住宿", "订票", "补助", "审批"]
+    batch = await kb.search_bundle(queries)
+    assert len(batch["items"]) == 20
+    assert [item["id"] for item in batch["items"][:4]] == queries
+    assert [result["returned"] for result in batch["query_results"]] == [5, 5, 5, 5]
 
 
 def test_same_content_in_two_files_is_one_hit_and_rule_cards_are_sent_once(tmp_path):
