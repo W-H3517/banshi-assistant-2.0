@@ -3,10 +3,21 @@
 import re
 from collections import Counter
 
-from .markers import EFFECT_START, PAGE_NUMBER, TOC_ENTRY, article_label, heading_level
+from .markers import (
+    ARTICLE,
+    EFFECT_START,
+    PAGE_NUMBER,
+    TOC_ENTRY,
+    article_label,
+    heading_level,
+    item_marker,
+)
 
 SENTENCE_END = ("。", "！", "？")
-EXPLICIT_START = ("article", "heading", "document_title", "table")
+ITEM_END = SENTENCE_END + ("；", ";")
+CAP_END = ("：", ":")
+CAP_LIMIT = 300  # 帽句超过该字数不成组，避免每个分点片段重复长帽句
+EXPLICIT_START = ("article", "heading", "document_title", "table", "item")
 
 
 def exclude_blocks(pages):
@@ -87,8 +98,70 @@ def assemble_document(pages, title):
             "confidence": block["confidence"],
             "boxes": [None] * len(separator) + block.get("boxes", [None] * len(text))})
 
-    for block in blocks:
+    def indented(block):
+        left = margins[block["page"]]
+        return bool(left is not None and block.get("bbox")
+                    and block["bbox"][0] - left > block.get("font_size", 12) * 1.3)
+
+    def separator_for(text):
+        previous = current["content"]
+        if not previous:
+            return ""
+        if previous[-1] in "。！？；?" or re.match(r"^[（(][一二三四五六七八九十\d]+[）)]", text):
+            return "\n\n"
+        if previous[-1].isascii() and text[0].isascii():
+            return " "
+        return ""
+
+    def structural(block, text):
+        return (block["kind"] in ("table", "document_title")
+                or (bool(title) and "".join(text.split()) == "".join(title.split()))
+                or heading_level(text) in (0, 1, 2) or ARTICLE.match(text)
+                or EFFECT_START.search(text) or re.match(r"^附件\s*[:：]", text))
+
+    def next_item_follows(index):
+        """缩进的新段落之后是否还有本组的下一项：先遇到结构标记或同级/更高级编号即停。"""
+        for block in blocks[index + 1:]:
+            if structural(block, block["text"]):
+                return False
+            marker = item_marker(block["text"])
+            if marker and marker[0] <= listing["level"]:
+                return marker[0] == listing["level"] and marker[1] == listing["next"]
+        return False
+
+    # 帽句（“第…条”条文或以冒号结尾的段落）后从序号 1 开始、同一种编号连续递增的分点；只按最外一级切分。
+    listing = None
+    for index, block in enumerate(blocks):
         text = block["text"]
+        marker = item_marker(text) if block["kind"] != "table" else None
+        if listing:
+            if marker and marker[0] == listing["level"] and marker[1] == listing["next"]:
+                listing["next"] += 1
+                begin(marker[2], "item")
+                current["cap_id"] = listing["cap_id"]
+                append(block)
+                continue
+            ended = (structural(block, text) or (marker and marker[0] <= listing["level"])
+                     or (indented(block) and current["content"].endswith(ITEM_END)
+                         and not next_item_follows(index)))
+            if not ended:
+                # 分点首行是小标题（如“（一）成立谈判小组”）时，其后正文另起一行。
+                subtitle = (len(current["source_spans"]) == 1 and indented(block)
+                            and heading_level(current["content"]) is not None)
+                append(block, "\n" if subtitle else separator_for(text))
+                continue
+            listing = None
+        if (marker and marker[1] == 1 and current is not None and not structural(block, text)
+                and len(current["content"]) <= CAP_LIMIT
+                and (ARTICLE.match(current["content"])
+                     # 普通段落的冒号帽句；首项本身像小标题（如通知里的“一、规范出行”）时不算分点。
+                     or current["kind"] == "text" and current["content"].rstrip().endswith(CAP_END)
+                     and heading_level(text) is None)):
+            listing = {"cap_id": current["id"], "level": marker[0], "next": 2}
+            begin(marker[2], "item")
+            current["cap_id"] = listing["cap_id"]
+            append(block)
+            continue
         is_title = bool(title) and "".join(text.split()) == "".join(title.split())
         if block["kind"] == "table":
             begin(f"表格（PDF 第 {block['page']} 页）", "table")
@@ -113,21 +186,12 @@ def assemble_document(pages, title):
             begin("附件目录", "text")
             append(block)
         else:
-            left = margins[block["page"]]
-            indented = (left is not None and block.get("bbox")
-                        and block["bbox"][0] - left > block.get("font_size", 12) * 1.3)
-            if current is None or current["kind"] in ("heading", "document_title") or (
+            indent = indented(block)
+            if current is None or current["kind"] in ("heading", "document_title", "item") or (
                     current["kind"] == "text" and current["content"].endswith(SENTENCE_END)
-                    and (indented or current["source_spans"][-1]["page"] != block["page"])):
-                begin("说明 / 段落", "text", "paragraph_indent" if indented else "layout")
-            previous = current["content"]
-            separator = ""
-            if previous:
-                if previous[-1] in "。！？；?" or re.match(r"^[（(][一二三四五六七八九十\d]+[）)]", text):
-                    separator = "\n\n"
-                elif previous[-1].isascii() and text[0].isascii():
-                    separator = " "
-            append(block, separator)
+                    and (indent or current["source_spans"][-1]["page"] != block["page"])):
+                begin("说明 / 段落", "text", "paragraph_indent" if indent else "layout")
+            append(block, separator_for(text))
     finish("document_end")
     for section in sections:
         section["pages"] = sorted({span["page"] for span in section["source_spans"]})

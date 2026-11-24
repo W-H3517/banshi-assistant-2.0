@@ -56,14 +56,18 @@ def row_regions(row, pages):
 def build_chunks(structure, tables, pages, title, embeddings):
     by_id = {node["id"]: node for node in structure["nodes"]}
     rows = {(table["id"], row["row"]): (table, row) for table in tables for row in table["rows"]}
+    units = {unit["id"]: unit for unit in structure["units"]}
     chunks = []
     for unit in structure["units"]:
-        if unit["kind"] in NOT_INDEXED or "caption_of" in unit:
+        # 帽句不单独检索：它随每个分点片段出现。
+        if unit["kind"] in NOT_INDEXED or "caption_of" in unit or unit.get("leads"):
             continue
         node = by_id[unit["node_id"]]
         table, row = rows[unit["table_ref"]["table"], unit["table_ref"]["row"]] \
             if unit["kind"] == "table_row" else (None, None)
-        parts = embeddings.split(row_retrieval_text(table, row) if row else unit["content"])
+        lead = units[unit["lead_unit_id"]]["content"].strip() + "\n" if "lead_unit_id" in unit else ""
+        reserved = len(embeddings.tokenizer.encode(lead, add_special_tokens=False).ids) if lead else 0
+        parts = embeddings.split(row_retrieval_text(table, row) if row else unit["content"], reserved)
         for part in parts:
             start, end = part["start"], part["end"]
             # 标题只在正文开头：只有首个片段可省去路径中的该标题，拆出的后续片段仍需路径。
@@ -81,8 +85,8 @@ def build_chunks(structure, tables, pages, title, embeddings):
                      "chapter": chapter,
                      "source": {"document_title": title, "filename": structure["filename"],
                                 "chapter": chapter, "article": article},
-                     "pages": chunk_pages, "content": part["content"], "start": start, "end": end,
-                     "token_count": len(embeddings.tokenizer.encode(part["content"]).ids),
+                     "pages": chunk_pages, "content": lead + part["content"], "start": start, "end": end,
+                     "token_count": len(embeddings.tokenizer.encode(lead + part["content"]).ids),
                      "regions": regions, "location_status": status,
                      "warnings": node["warnings"] + ([SPLIT_WARNING] if len(parts) > 1 else []),
                      "boundary_status": node["boundary_status"],

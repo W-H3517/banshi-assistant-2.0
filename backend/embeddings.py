@@ -31,8 +31,8 @@ class LocalEmbeddings:
         self.tokenizer.no_padding()
         self.lock = threading.Lock()
 
-    def split(self, text: str) -> list[dict]:
-        """正文单独计入预算；超长时按句界拆分，保留原文 offsets。"""
+    def split(self, text: str, reserved: int = 0) -> list[dict]:
+        """正文单独计入预算，reserved 为每段前要附加的帽句 token 数；超长时按句界拆分，保留原文 offsets。"""
         chunks, position = [], 0
         while position < len(text):
             window = text[position:position + 1000]
@@ -40,10 +40,10 @@ class LocalEmbeddings:
             if not offsets:
                 position += len(window)
                 continue
-            budget = 510
+            budget = 510 - reserved
             count = min(budget, len(offsets))
             boundary = offsets[count - 1][1]
-            while count > 1 and len(self.tokenizer.encode(window[:boundary]).ids) > 512:
+            while count > 1 and len(self.tokenizer.encode(window[:boundary]).ids) > 512 - reserved:
                 count -= 1
                 boundary = offsets[count - 1][1]
             if position + boundary < len(text.rstrip()):

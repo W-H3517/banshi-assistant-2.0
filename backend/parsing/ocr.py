@@ -56,6 +56,16 @@ def bbox(polygon):
             max(p[0] for p in polygon), max(p[1] for p in polygon)]
 
 
+def char_boxes(text, words, sx, sy, view):
+    """逐字结果不含整行文字里的空格：跳过空白对齐，空白位置无字框；非空白字对不上时整行无字框。"""
+    chars = [(char, bbox([[x * sx + view[0], y * sy + view[1]] for x, y in word[2]]))
+             for word in words for char in word[0] if not char.isspace()]
+    if "".join(char for char, _ in chars) != "".join(char for char in text if not char.isspace()):
+        return [None] * len(text)
+    boxes = iter(box for _, box in chars)
+    return [None if char.isspace() else next(boxes) for char in text]
+
+
 class LocalOCR:
     def __init__(self, cache_dir):
         self.cache_dir = cache_dir
@@ -95,11 +105,7 @@ class LocalOCR:
             sx, sy = (view[2] - view[0]) / image.width, (view[3] - view[1]) / image.height
             for line in lines:
                 line["polygon"] = [[x * sx + view[0], y * sy + view[1]] for x, y in line["polygon"]]
-                words = line.pop("words")
-                line["boxes"] = ([bbox([[x * sx + view[0], y * sy + view[1]] for x, y in word[2]])
-                                  for word in words for _ in word[0]]
-                                 if "".join(w[0] for w in words) == line["text"]
-                                 else [None] * len(line["text"]))
+                line["boxes"] = char_boxes(line["text"], line.pop("words"), sx, sy, view)
         finally:
             image.close()
         if not lines:

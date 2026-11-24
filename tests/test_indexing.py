@@ -127,7 +127,7 @@ def test_text_highlight_stops_at_chunk_boundary_and_tracks_repeated_text():
     class Splitter:
         tokenizer = SimpleNamespace(encode=lambda text: SimpleNamespace(ids=list(text)))
 
-        def split(self, text):
+        def split(self, text, reserved=0):
             return [{"content": "ABC", "start": 0, "end": 3},
                     {"content": "ABC", "start": 4, "end": 7}]
 
