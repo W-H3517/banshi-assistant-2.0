@@ -200,7 +200,7 @@ class ChatService:
             async for event in stream:
                 text = None
                 if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
-                    # 工具调用前的说明与之后的正式回答是两段文字，分段显示和保存。
+                    # 同一段文字里先后开始的文字块之间空一行。
                     text = ("\n\n" if assistant["text"] else "") + event.part.content
                 elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
                     text = event.delta.content_delta
@@ -208,6 +208,10 @@ class ChatService:
                     name = event.part.tool_name
                     tool = {"id": event.tool_call_id, "name": name, "status": "running",
                             "input": tool_input(name, event.part.args_as_dict())}
+                    if assistant["text"]:
+                        # 调用工具前说的话属于处理过程，挂在这一步上；正文只留最后的回答。
+                        # 前端收到带 note 的新步骤时清空已显示的正文。
+                        tool["note"], assistant["text"] = assistant["text"], ""
                     assistant["tools"].append(tool)
                     queue.put_nowait({"type": "tool", **tool})
                 elif isinstance(event, FunctionToolResultEvent):
