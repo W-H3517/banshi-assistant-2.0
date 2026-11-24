@@ -112,7 +112,9 @@ def create_agent(settings: Settings, user_id: str, db: Database, *, model=None):
             if isinstance(part, ToolCallPart) and part.tool_name == "search_documents"
         )
         if first_search.tool_call_id != ctx.tool_call_id:
-            raise ModelRetry("每次模型响应只执行第一个搜索调用。先核对其结果，下一次再补查。")
+            # 普通返回而非 ModelRetry：多余调用不是参数错误，不占用工具的纠错次数。
+            return {"skipped": "每次模型响应只执行第一个搜索调用。先核对其结果，下一次再补查。",
+                    "documents": {}, "items": [], "experiences": [], "rule_cards": []}
         sent_cards.update(cards_in_history(ctx.messages))
         try:
             result = await db.knowledge.search_bundle(queries, document_id, node_id, sent_cards)
