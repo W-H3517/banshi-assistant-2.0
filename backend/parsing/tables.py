@@ -101,8 +101,19 @@ def headerless(grid):
     return alike * 2 >= len(grid[0])
 
 
-def column_name(cell):
-    return FOOTNOTE_MARK.sub("", cell["value"])
+def header_labels(grid, depth):
+    """表头各格的文字：末尾数字仅在去掉后不与同一表头行的其他格重名时才当脚注编号去掉。
+
+    “标准8”→“标准”；“方案1”“方案2”去掉后会重名，说明数字是列名的一部分，保留原样。
+    """
+    labels = {}
+    for r, row in enumerate(grid[:depth]):
+        stripped = [FOOTNOTE_MARK.sub("", cell["value"]) for cell in row]
+        for c, cell in enumerate(row):
+            clash = any(o != cell["value"] and stripped[i] == stripped[c]
+                        for i, o in enumerate(cell["value"] for cell in row) if i != c)
+            labels[r, c] = cell["value"] if clash else stripped[c]
+    return labels
 
 
 def trailing_lead(section):
@@ -190,7 +201,8 @@ def new_table(number, grid, page, caption, before):
     lead, tail_unit = (trailing_lead(before) if before is not None and before["kind"] != "table"
                        else (None, None))
     unit = unit or tail_unit
-    names = [" / ".join(dict.fromkeys(column_name(row[col]) for row in grid[:depth]
+    labels = header_labels(grid, depth)
+    names = [" / ".join(dict.fromkeys(labels[r, col] for r, row in enumerate(grid[:depth])
                                       if row[col]["value"])) or
              (f"列 {col + 1}" if depth == 0 else f"未识别字段（列 {col + 1}）")
              for col in range(len(grid[0]))]

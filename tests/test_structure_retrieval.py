@@ -144,6 +144,9 @@ def test_small_table_hit_returns_whole_table_and_query_table_finds_rows(app_clie
     row, = found["rows"]
     assert row["fields"] == {"Region": "City B", "Limit": "400"}
     assert found["table"]["columns"] == ["Region", "Limit"] and found["table"]["total_rows"] == 2
+    preview = client.get(f"/api/documents/{document_id}/chunk-preview").json()
+    # 查表引用的行节点可在切分预览中对应到该行片段，供证据栏高亮。
+    assert [c["row"] for c in preview["chunks"] if c.get("row_node_id") == row["node_id"]] == [3]
     single = client.portal.call(kb.read, row["node_id"])
     assert single["pagination_complete"] and "400" in single["items"][0]["content"]
     assert "500" not in single["items"][0]["content"]

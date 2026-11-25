@@ -125,7 +125,8 @@ def build_chunks(structure, tables, pages, title, embeddings):
             chapter, article = source_path(by_id, node, unit.get("body_heading_id") if start == 0 else None)
             if row:
                 regions, status = row_regions(row, pages)
-                chunk_pages = [row["page"]]
+                # 小表命中返回整张表，来源须含整表所在各页；大表行只引用本行所在页。
+                chunk_pages = node["pages"] if whole_row else [row["page"]]
                 start, end = (0, node["length"]) if whole_row else (0, 0)
             elif table:
                 regions, status = table_regions(table, pages)

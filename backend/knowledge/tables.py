@@ -94,6 +94,8 @@ class Tables:
                            head, "列：" + "、".join(n.replace(" / ", "") for n in field_names(table)),
                            f"行（共 {len(table['rows'])} 行），例如：{keys[:CARD_SAMPLE]}……"]),
                        card_head=head, row_keys=keys,
+                       # 判断不同文件是否收录同一张表：单位与列名也须一致
+                       signature=(table["unit"] or "") + "|" + "|".join(field_names(table)),
                        total_rows=len(table["rows"]),
                        table_rows=[{"row": row["row"], "page": row["page"],
                                     "text": row_retrieval_text(table, row)} for row, _ in matched])

@@ -36,3 +36,16 @@ def test_weak_hits_after_the_first_few_are_cut():
     from backend.knowledge.search import cut_weak
     hits = [{"similarity": v} for v in (.70, .50, .40, .60, .54, .56)]
     assert [h["similarity"] for h in cut_weak(hits)] == [.70, .50, .40, .60, .56]
+
+
+def test_same_rows_with_different_units_are_not_merged_across_files():
+    from backend.knowledge.search import merge_table_copies
+
+    def hit(document, unit):
+        return {"id": document, "title": document, "node_id": document, "pages": [1], "citation": "",
+                "also_in": [], "signature": f"{unit}|会议类别|住宿费",
+                "table_rows": [{"row": 2, "page": 1, "text": "会议类别：业务会议；住宿费：100"}]}
+
+    kept = merge_table_copies([hit("甲", "元/人·天"), hit("乙", "元/间·天"), hit("丙", "元/人•天")])
+    # 单位不同的表各自保留；单位写法仅有标点差异的视为同一张表。
+    assert [h["id"] for h in kept] == ["甲", "乙"] and kept[0]["also_in"][0]["id"] == "丙"

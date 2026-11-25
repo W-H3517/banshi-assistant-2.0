@@ -153,6 +153,7 @@ def test_table_chunks_highlight_shared_source_cells():
     whole, a, b = result["chunks"]
     assert whole["kind"] == "table" and whole["table_whole"] and "City A" in whole["content"]
     assert a["node_id"] == b["node_id"] == whole["node_id"] and a["expanded"] == whole["content"]
+    assert a["pages"] == b["pages"] == whole["pages"]  # 命中任一行都返回整表，引用整表各页
     assert a["warnings"] and b["warnings"] and (a["row"], b["row"]) == (2, 3)
     assert a["location_status"] == b["location_status"] == "complete"
     assert len(a["regions"]) == len(b["regions"]) == 2

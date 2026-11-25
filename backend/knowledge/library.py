@@ -22,7 +22,7 @@ DUPLICATE = "该 PDF 已在知识库中，无需重复上传"
 
 # 普通员工在切分预览里能看到的片段字段；其余为管理员诊断信息。
 READER_FIELDS = ("ordinal", "node_id", "parent_id", "title", "chapter", "source", "pages",
-                 "content", "regions", "row", "header_pages")
+                 "content", "regions", "row", "row_node_id", "header_pages")
 
 
 class DuplicateDocument(ValueError):
@@ -181,8 +181,14 @@ class Library:
                 Chunk.ordinal, Chunk.node_id, Chunk.content, Chunk.detail,
             ).where(Chunk.document_id == document_id).order_by(Chunk.ordinal))).all()
         parents = {node["id"]: node["parent_id"] for node in nodes}
+        # 表格行片段挂在表格节点下；附上行节点 ID，查表引用的行可单独高亮。
+        row_nodes = {(node["parent_id"], node["row"]): node["id"] for node in nodes
+                     if node["kind"] == "table_row"}
         items = [{**chunk.detail, "ordinal": chunk.ordinal, "node_id": chunk.node_id,
-                  "parent_id": parents[chunk.node_id], "content": chunk.content} for chunk in chunks]
+                  "parent_id": parents[chunk.node_id], "content": chunk.content,
+                  **({"row_node_id": row_nodes[chunk.node_id, chunk.detail["row"]]}
+                     if "row" in chunk.detail else {})}
+                 for chunk in chunks]
         result = {"pages": meta["pages"], "ocr_pages": meta["ocr_pages"], "warnings": meta["warnings"],
                   "document": public_document(document)}
         if diagnostics:

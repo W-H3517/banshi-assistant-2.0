@@ -77,11 +77,13 @@ def cut_weak(hits):
 def merge_table_copies(hits):
     """不同文件收录的同一张大表只保留先命中的一条，其余记入 also_in。
 
-    同一张表以筛出的行内容判断；没有筛到行时以行标识的开头部分判断（两份文件的表名常不同）。"""
+    同一张表须单位、列名一致（两份文件的表名常不同，不比较表名），且筛出的行内容相同；
+    没有筛到行时比较行标识的开头部分。"""
     owners, kept = {}, []
     for hit in hits:
         rows = "".join(row["text"] for row in hit.get("table_rows", []))
-        mark = fingerprint(rows or hit.get("row_keys", "")[:120])
+        content = rows or hit.get("row_keys", "")[:120]
+        mark = fingerprint(hit["signature"] + content) if content else ""
         owner = owners.get(mark) if mark else None
         if owner is None:
             if mark:

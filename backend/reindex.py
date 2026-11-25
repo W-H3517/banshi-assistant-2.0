@@ -1,7 +1,7 @@
 """用库中保存的原 PDF 重建全部检索索引：uv run --locked python -m backend.reindex。
 
 先逐份解析并计算向量，全部成功后在一个事务里替换派生索引；任何一步失败都不改动运行库。
-原 PDF、文档 ID、账号、会话和经验保留。请在后端停止时运行。
+原 PDF、文档 ID、账号、会话和经验保留。须在后端停止时运行（端口被占用则拒绝）。
 """
 
 import argparse
@@ -12,8 +12,9 @@ from pathlib import Path
 from sqlalchemy import delete, select, text
 
 from .config import Settings
-from .db import Chunk, Conversation, Database, Document, DocumentIndex
+from .db import Chunk, Database, Document, DocumentIndex
 from .knowledge import KnowledgeBase
+from .preflight import PORT, check_port
 
 LEGACY_TABLES = ("chunks", "document_parses")  # 更早的索引表，替换时一并移除
 
@@ -39,8 +40,6 @@ async def rebuild(db, settings):
             stored = (await session.execute(select(Document.sha256, Document.original))).all()
             if any(hashlib.sha256(raw).hexdigest() != digest for digest, raw in stored):
                 raise ValueError("原 PDF 与记录的哈希不符，已取消替换")
-            if await session.scalar(select(Conversation.id).where(Conversation.status == "running").limit(1)):
-                raise ValueError("存在正在生成的会话，请先停止后端再重建")
             await session.execute(delete(Chunk))
             await session.execute(delete(DocumentIndex))
             for legacy in LEGACY_TABLES:
@@ -63,8 +62,11 @@ async def main():
     args = parser.parse_args()
     settings = Settings(data_dir=args.data_dir)  # 不加载 .env 或外部聊天密钥
     db = Database(settings)
+    if check_port():
+        raise SystemExit(f"后端正在运行（端口 {PORT} 被占用），请先停止后端再重建。")
     try:
-        await db.create_tables()
+        # 与后端启动相同：建表，并把异常退出遗留的“生成中”会话标为中断，避免挡住重建。
+        await db.initialize()
         await rebuild(db, settings)
     finally:
         await db.engine.dispose()

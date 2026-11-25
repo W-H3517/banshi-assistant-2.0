@@ -152,3 +152,31 @@ def test_reindex_rebuilds_from_stored_pdfs_and_rolls_back_on_failure(tmp_path, m
         # 原 PDF 与文档 ID 不变，片段与索引代次全部换新。
         assert before[0] == after[0] and not before[1].intersection(after[1]) and before[2] != after[2]
         assert client.get(f"/api/conversations/{conversation['id']}").json() == conversation
+
+
+def test_reindex_command_clears_running_left_by_a_crash(tmp_path, monkeypatch):
+    import asyncio
+    import sys
+
+    from backend import reindex
+    from backend.db import Conversation
+
+    settings = Settings(data_dir=tmp_path / "app")
+    with TestClient(create_app(settings)) as client:
+        login(client)
+        conversation = client.post("/api/conversations").json()
+        db = client.app.state.db
+
+        async def crash():
+            async with db.sessions.begin() as session:
+                (await session.get(Conversation, conversation["id"])).status = "running"
+        client.portal.call(crash)
+    monkeypatch.setattr(sys, "argv", ["reindex", "--data-dir", str(settings.data_dir)])
+    monkeypatch.setattr(reindex, "check_port", list)
+    asyncio.run(reindex.main())
+    with TestClient(create_app(settings)) as client:
+        login(client)
+        assert client.get(f"/api/conversations/{conversation['id']}").json()["status"] == "interrupted"
+    monkeypatch.setattr(reindex, "check_port", lambda: ["端口被占用"])
+    with pytest.raises(SystemExit, match="后端正在运行"):
+        asyncio.run(reindex.main())
