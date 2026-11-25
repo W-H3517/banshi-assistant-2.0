@@ -31,8 +31,14 @@ def test_fill_orders_lines_top_down_and_grid_shares_merged_box():
              (1, 1, 0, 1, (0, 50, 200, 100))]
     chars = [(10, "序", 50, 10), (30, "号", 50, 30), (10, "5", 120, 20), (10, "0", 140, 20),
              (70, "合", 60, 70), (70, "并", 160, 70)]
-    values = fill(cells, chars)
-    assert values == ["序号", "50", "合并"]
+    values, placed = fill(cells, chars)
+    assert values == ["序号", "50", "合并"] and placed == set(range(len(chars)))
     grid = to_grid(cells, values, lambda box: box)
     assert grid[1][0]["bbox"] == grid[1][1]["bbox"] and grid[1][1]["value"] == "合并"
     assert grid[1][1]["source_column"] == 1
+
+
+def test_fill_reports_chars_outside_cells():
+    cells = [(0, 0, 0, 0, (0, 50, 100, 100))]
+    chars = [(10, "表", 50, 10), (70, "值", 50, 70)]
+    assert fill(cells, chars) == (["值"], {1})

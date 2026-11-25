@@ -49,3 +49,11 @@ def test_same_rows_with_different_units_are_not_merged_across_files():
     kept = merge_table_copies([hit("甲", "元/人·天"), hit("乙", "元/间·天"), hit("丙", "元/人•天")])
     # 单位不同的表各自保留；单位写法仅有标点差异的视为同一张表。
     assert [h["id"] for h in kept] == ["甲", "乙"] and kept[0]["also_in"][0]["id"] == "丙"
+
+
+def test_keyword_top_hits_survive_cut_and_baseline_is_best_similarity():
+    from backend.knowledge.search import cut_weak
+    hits = [{"similarity": v} for v in (.50, .60, .58, .40, .44)]
+    hits[3]["lexical_rank"] = 0  # 关键词第一名：相似度低也保留
+    assert [h["similarity"] for h in cut_weak(hits)] == [.50, .60, .58, .40]
+    assert cut_weak([]) == []

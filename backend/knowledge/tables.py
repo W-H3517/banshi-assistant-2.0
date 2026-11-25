@@ -128,12 +128,15 @@ class Tables:
         else:
             matched, used, common = [(row, grouped_fields(table, row)) for row in table["rows"]], [], []
 
-        def keep(index, field):
-            return index == 0 or not columns or any(c in squash(field["name"]) for c in columns)
+        def keep(index, fields):
+            # 行标识列（与 row_key 一致：有序号列时取其后一列）总是保留，否则筛列后分不清是哪一行。
+            key = 1 if table["serial"] and len(fields) > 1 else 0
+            return (index == key or not columns
+                    or any(c in squash(fields[index]["name"]) for c in columns))
 
         rows = [{"row": row["row"], "node_id": row_nodes.get(row["row"]), "page": row["page"],
                  "citation": outline.citation(row["page"]),
-                 "fields": {f["name"]: f["value"] for i, f in enumerate(fields) if keep(i, f)},
+                 "fields": {f["name"]: f["value"] for i, f in enumerate(fields) if keep(i, fields)},
                  **({"inherited": [f["name"] for f in fields if f["inherited"]]}
                     if any(f["inherited"] for f in fields) else {})}
                 for row, fields in matched[:MAX_ROWS]]
@@ -150,8 +153,10 @@ class Tables:
             result["ignored_keywords"] = common  # 表内大多数行都有，区分不了行
         if keywords and not used:
             result["note"] = "关键词在表中都没有出现，或出现在大多数行里；换用表中的写法（如地区全称、类别名）。"
-        elif len(matched) > MAX_ROWS:
+        elif len(matched) > MAX_ROWS and keywords:
             result["note"] = f"符合的行超过 {MAX_ROWS} 行，只返回最相关的 {MAX_ROWS} 行；可增加关键词缩小范围。"
+        elif len(matched) > MAX_ROWS:
+            result["note"] = f"未给关键词，只按表中顺序返回前 {MAX_ROWS} 行；用关键词查其余行。"
         if any("inherited" in r for r in rows):
             result["inherited_note"] = "inherited 中的字段承接上页合并单元格的值，原页该格为空白。"
         return result

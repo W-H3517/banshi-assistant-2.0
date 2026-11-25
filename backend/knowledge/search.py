@@ -23,7 +23,8 @@ BATCH_RESULTS_PER_QUERY = 5
 RANK_DEPTH = 20  # 每路排名参与融合的阅读单元数
 # 这是候选召回阈值，不是“有制度依据”的判定；由 Agent 核对片段是否支持结论。
 MIN_SIMILARITY = 0.40
-# 每个查询至少返回前 KEEP_AT_LEAST 组；其后相似度比第一组低出 SIMILARITY_GAP 以上的不返回。
+# 每个查询至少返回前 KEEP_AT_LEAST 组；其后相似度比最高者低出 SIMILARITY_GAP 以上的不返回，
+# 关键词排名前 KEEP_AT_LEAST 的阅读单元（条号、地名等字面命中）除外。
 # 按表格问答评测定的值：正确条目与第一组的差距最大为 0.116，取 0.15 留余量。
 KEEP_AT_LEAST = 3
 SIMILARITY_GAP = 0.15
@@ -69,9 +70,14 @@ def compact(hit, multiple):
 
 
 def cut_weak(hits):
-    """相对截断：前 KEEP_AT_LEAST 组之后，向量相似度比第一组低出 SIMILARITY_GAP 以上的不再凑数返回。"""
-    return hits[:KEEP_AT_LEAST] + [h for h in hits[KEEP_AT_LEAST:]
-                                   if hits[0]["similarity"] - h["similarity"] <= SIMILARITY_GAP]
+    """相对截断：前 KEEP_AT_LEAST 组之后，向量相似度比最高者低出 SIMILARITY_GAP 以上、
+    且不是关键词前几名的，不再凑数返回。"""
+    if not hits:
+        return hits
+    best = max(h["similarity"] for h in hits)
+    return hits[:KEEP_AT_LEAST] + [
+        h for h in hits[KEEP_AT_LEAST:]
+        if best - h["similarity"] <= SIMILARITY_GAP or h.get("lexical_rank", RANK_DEPTH) < KEEP_AT_LEAST]
 
 
 def merge_table_copies(hits):
@@ -100,6 +106,9 @@ def merge_table_rows(item, hit):
     known = {row["row"] for row in item["table_rows"]}
     item["table_rows"] = item["table_rows"] + [r for r in hit["table_rows"] if r["row"] not in known]
     item["pages"] = sorted({r["page"] for r in item["table_rows"]}) or item["pages"]
+    item["page"] = item["pages"][0]
+    item["citation"] = f"/api/documents/{item['id']}#page={item['page']}"
+    item["warnings"] = list(dict.fromkeys(item["warnings"] + hit["warnings"]))
     item["content"] = render_table_hit(item)
 
 
@@ -138,7 +147,7 @@ class Search:
                     if allowed is None or row.node_id in allowed]
         if not rows:
             return []
-        ranked, fused, similarity = await asyncio.to_thread(self.rank, query, rows)
+        ranked, fused, similarity, lexical = await asyncio.to_thread(self.rank, query, rows)
         groups, owners, repeats = {}, {}, {}
         for index in ranked:
             row = rows[index]
@@ -187,6 +196,8 @@ class Search:
                 "citation": outline.citation(detail["pages"][0]),
                 "warnings": outline.warnings(detail["pages"]) + detail["warnings"]})
             hits[-1].update(score=fused[first.node_id], similarity=similarity[first.node_id])
+            if first.node_id in lexical:
+                hits[-1]["lexical_rank"] = lexical[first.node_id]
             if node["kind"] == "table" and not whole:
                 hits[-1].update(big_table=True, table_id=node["table_id"], label=node["label"])
         # 表内筛行先用完整词（“办公用品”），筛不到再用细分词，避免碎片词误配“办公用房”。
@@ -212,10 +223,11 @@ class Search:
         )
         semantic_order = [int(i) for i in np.argsort(-similarities)
                           if similarities[i] >= MIN_SIMILARITY]
-        scores, candidates = {}, set()
+        scores, candidates, places = {}, set(), []
         # 每路先限制阅读单元数；同一单元的多个子片段只贡献一次排名。
         for ranking in (lexical_order, semantic_order):
             groups = {}
+            places.append(groups)
             for index in ranking:
                 key = rows[index].node_id
                 if key not in groups:
@@ -230,7 +242,9 @@ class Search:
         for i in candidates:
             key = rows[i].node_id
             best[key] = max(best.get(key, -1.0), float(similarities[i]))
-        return order, scores, best
+        # 关键词路的名次（从 0 起），供相对截断保留字面命中靠前的单元。
+        lexical = {key: place - 1 for key, place in places[0].items()}
+        return order, scores, best, lexical
 
     async def search_bundle(self, queries, document_id=None, node_id=None, sent_cards=None):
         """Agent 用的检索：最多四个查询轮流合并，返回精简条目和尚未提供过的规则卡。

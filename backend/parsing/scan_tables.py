@@ -163,12 +163,16 @@ def model_cells(engine, image):
 
 
 def fill(cells, chars):
-    """把字按中心点归入单元格，按 OCR 行序和横向位置连成文字。"""
+    """把字按中心点归入单元格，按 OCR 行序和横向位置连成文字。
+
+    返回 (各格文字, 落入某个单元格的字在 chars 中的下标)。"""
     texts = {index: [] for index in range(len(cells))}
-    for line_y, char, x, y in chars:
+    placed = set()
+    for number, (line_y, char, x, y) in enumerate(chars):
         for index, (*_, (x0, y0, x1, y1)) in enumerate(cells):
             if x0 <= x <= x1 and y0 <= y <= y1:
                 texts[index].append((line_y, x, char))
+                placed.add(number)
                 break
     values = []
     for index in range(len(cells)):
@@ -179,7 +183,7 @@ def fill(cells, chars):
                 text += " "
             text += char
         values.append(text)
-    return values
+    return values, placed
 
 
 def to_grid(cells, values, to_pdf):
@@ -250,7 +254,8 @@ def recognize_tables(image, lines, layout, structure, to_pdf):
     """一页扫描图上的全部表格：返回 [{"bbox", "grid", "column_positions", "line_ids"}]。
 
     image 为 RGB 页面图，lines 为同一坐标系下的 OCR 行（polygon、boxes 为像素坐标），
-    to_pdf 把像素框 (x0, y0, x1, y1) 换成 PDF 坐标。line_ids 为落入表格、不再作正文的行。
+    to_pdf 把像素框 (x0, y0, x1, y1) 换成 PDF 坐标。line_ids 为落入表格、不再作正文的行：
+    过半的字落进单元格才算；表格框内其余的行（如被框进来的表题、表注）仍作正文。
     """
     array = np.asarray(image)
     found = layout(array)
@@ -275,7 +280,7 @@ def recognize_tables(image, lines, layout, structure, to_pdf):
         crop = cv2.warpAffine(crop, matrix, (crop.shape[1], crop.shape[0]),
                               flags=cv2.INTER_LINEAR, borderValue=255)
         inverse = cv2.invertAffineTransform(matrix)
-        chars = []
+        chars, owners = [], []  # owners[i]：第 i 个字所属的 OCR 行
         for line_index in inside:
             points = []
             for char, cx, cy in char_points(lines[line_index]):
@@ -284,12 +289,13 @@ def recognize_tables(image, lines, layout, structure, to_pdf):
             # 同一 OCR 行的字共用行高位置，格内按行自上而下、行内自左向右连写
             line_y = round(float(np.mean([y for *_, y in points])))
             chars.extend((line_y, char, px, py) for char, px, py in points)
+            owners.extend([line_index] * len(points))
         cells = ruled_cells(crop)
         if cells is None:
             cells = model_cells(structure, cv2.cvtColor(crop, cv2.COLOR_GRAY2BGR))
         if not cells:
             continue
-        values = fill(cells, chars)
+        values, placed = fill(cells, chars)
 
         grid = to_grid(cells, values, lambda box, inverse=inverse, origin=(x0, y0):
                        to_pdf(page_box(box, inverse, origin)))
@@ -298,5 +304,7 @@ def recognize_tables(image, lines, layout, structure, to_pdf):
         xs = sorted({cell["bbox"][0] for row in grid for cell in row if cell["bbox"]}
                     | {cell["bbox"][2] for row in grid for cell in row if cell["bbox"]})
         tables.append({"bbox": list(to_pdf((x0, y0, x1, y1))), "grid": grid,
-                       "column_positions": xs, "line_ids": inside})
+                       "column_positions": xs,
+                       "line_ids": [i for i in inside if 2 * sum(
+                           owners[n] == i for n in placed) >= owners.count(i)]})
     return tables

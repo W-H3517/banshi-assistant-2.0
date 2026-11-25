@@ -120,7 +120,7 @@ def assemble_document(pages, title):
                 or EFFECT_START.search(text) or re.match(r"^附件\s*[:：]", text))
 
     def next_item_follows(index):
-        """缩进的新段落之后是否还有本组的下一项：先遇到结构标记或同级/更高级编号即停。"""
+        """新段落（缩进或换页）之后是否还有本组的下一项：先遇到结构标记或同级/更高级编号即停。"""
         for block in blocks[index + 1:]:
             if structural(block, block["text"]):
                 return False
@@ -141,8 +141,11 @@ def assemble_document(pages, title):
                 current["cap_id"] = listing["cap_id"]
                 append(block)
                 continue
+            # 与普通段落相同：上一句已结束且本块缩进或换页时是新段落；其后没有本组下一项即结束分点组。
+            new_paragraph = (indented(block)
+                             or current["source_spans"][-1]["page"] != block["page"])
             ended = (structural(block, text) or (marker and marker[0] <= listing["level"])
-                     or (indented(block) and current["content"].endswith(ITEM_END)
+                     or (new_paragraph and current["content"].endswith(ITEM_END)
                          and not next_item_follows(index)))
             if not ended:
                 # 分点首行是小标题（如“（一）成立谈判小组”）时，其后正文另起一行。

@@ -91,3 +91,18 @@ def test_ocr_char_boxes_skip_line_spaces():
     boxes = char_boxes('（二） 询价单', [word('（二）', 0), word('询价单', 40)], 1, 1, (0, 0))
     assert boxes[3] is None and boxes[4] == [40, 0, 50, 10] and len(boxes) == 7
     assert char_boxes('询价单', [word('报价单', 0)], 1, 1, (0, 0)) == [None] * 3
+
+
+def test_list_ends_at_unindented_paragraph_on_next_page():
+    first, second = ocr_pages([
+        (80, '第五条报销需提供以下材料：'),
+        (80, '1.发票；'),
+        (80, '2.行程单。'),
+    ]), ocr_pages([(50, '出差人员应在返回后十日内报销。')])
+    second[0]['number'] = 2
+    for block in second[0]['blocks']:
+        block['page'], block['id'] = 2, block['id'].replace('p1', 'p2')
+    sections = assemble_document(first + second, '')['sections']
+    items = [s for s in sections if s['kind'] == 'item']
+    assert [s['content'] for s in items] == ['1.发票；', '2.行程单。']
+    assert sections[-1]['content'] == '出差人员应在返回后十日内报销。'
