@@ -1,10 +1,12 @@
 """本地 CPU 嵌入；模型下载与正常服务运行分离。"""
 
 import threading
+from pathlib import Path
 
 import numpy as np
 from fastembed import TextEmbedding
 from huggingface_hub import snapshot_download
+from huggingface_hub.errors import LocalEntryNotFoundError
 from tokenizers import Tokenizer
 
 MODEL_NAME = "BAAI/bge-small-zh-v1.5"
@@ -13,14 +15,28 @@ MODEL_REVISION = "46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59"
 QUERY_PREFIX = "为这个句子生成表示以用于检索相关文章："
 
 
-class LocalEmbeddings:
-    def __init__(self, cache_dir, *, download=False):
-        model_path = snapshot_download(
+MISSING = "本地嵌入模型未准备，请先运行 uv run --locked python -m backend.prepare"
+
+
+def local_model_path(cache_dir, *, download=False):
+    """嵌入模型快照目录；download=False 时只用本地缓存，缺失时给出准备命令。"""
+    try:
+        path = snapshot_download(
             repo_id=MODEL_REPO, revision=MODEL_REVISION, cache_dir=str(cache_dir),
             local_files_only=not download,
             allow_patterns=["config.json", "model_optimized.onnx", "special_tokens_map.json",
                             "tokenizer.json", "tokenizer_config.json"],
         )
+    except LocalEntryNotFoundError:
+        raise RuntimeError(MISSING) from None
+    if not (Path(path) / "model_optimized.onnx").is_file():
+        raise RuntimeError(MISSING)
+    return path
+
+
+class LocalEmbeddings:
+    def __init__(self, cache_dir, *, download=False):
+        model_path = local_model_path(cache_dir, download=download)
         self.model = TextEmbedding(
             model_name=MODEL_NAME, cache_dir=str(cache_dir), threads=2,
             specific_model_path=model_path, local_files_only=True,
@@ -31,8 +47,8 @@ class LocalEmbeddings:
         self.tokenizer.no_padding()
         self.lock = threading.Lock()
 
-    def split(self, text: str) -> list[dict]:
-        """正文单独计入预算；超长时按句界拆分，保留原文 offsets。"""
+    def split(self, text: str, reserved: int = 0) -> list[dict]:
+        """正文单独计入预算，reserved 为每段前要附加的帽句 token 数；超长时按句界拆分，保留原文 offsets。"""
         chunks, position = [], 0
         while position < len(text):
             window = text[position:position + 1000]
@@ -40,10 +56,10 @@ class LocalEmbeddings:
             if not offsets:
                 position += len(window)
                 continue
-            budget = 510
+            budget = 510 - reserved
             count = min(budget, len(offsets))
             boundary = offsets[count - 1][1]
-            while count > 1 and len(self.tokenizer.encode(window[:boundary]).ids) > 512:
+            while count > 1 and len(self.tokenizer.encode(window[:boundary]).ids) > 512 - reserved:
                 count -= 1
                 boundary = offsets[count - 1][1]
             if position + boundary < len(text.rstrip()):

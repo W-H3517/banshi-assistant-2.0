@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from ..db import Chunk, Document, DocumentIndex
 from .outline import STALE, find_outline, load_outlines, normalize_label
+from .tables import render_table_hit
 
 logger = logging.getLogger(__name__)
 jieba.setLogLevel(logging.WARNING)
@@ -22,10 +23,17 @@ BATCH_RESULTS_PER_QUERY = 5
 RANK_DEPTH = 20  # 每路排名参与融合的阅读单元数
 # 这是候选召回阈值，不是“有制度依据”的判定；由 Agent 核对片段是否支持结论。
 MIN_SIMILARITY = 0.40
+# 每个查询至少返回前 KEEP_AT_LEAST 组；其后相似度比最高者低出 SIMILARITY_GAP 以上的不返回，
+# 关键词排名前 KEEP_AT_LEAST 的阅读单元（条号、地名等字面命中）除外。
+# 按表格问答评测定的值：正确条目与第一组的差距最大为 0.116，取 0.15 留余量。
+KEEP_AT_LEAST = 3
+SIMILARITY_GAP = 0.15
 
 
-def terms(text):
-    return [word.casefold() for word in jieba.cut_for_search(text)
+def terms(text, precise=False):
+    """检索词：默认用搜索模式细分（长词再拆出短词）；precise=True 只取精确分词的完整词。"""
+    words = jieba.cut(text) if precise else jieba.cut_for_search(text)
+    return [word.casefold() for word in words
             if word not in STOP_WORDS and re.search(r"\w", word) and len(word) > 1]
 
 
@@ -44,6 +52,9 @@ def compact(hit, multiple):
         item["article_id"] = hit["article_id"]
     if hit["kind"] == "table_row":
         item["kind"] = "table_row"
+    elif hit["kind"] == "table":
+        # 整表片段已含全部行；信息卡只有表名、列和行标识，需用 query_table 查具体行。
+        item["kind"] = "table" if hit["excerpt_complete"] else "table_card"
     elif not hit["excerpt_complete"]:
         item["partial"] = True  # 只是所属段落的一部分，可按 node_id 补读
     if hit["boundary_status"] != "confirmed":
@@ -56,6 +67,49 @@ def compact(hit, multiple):
         item["matched_queries"] = hit["matched_queries"]
     item["content"] = hit["content"]
     return item
+
+
+def cut_weak(hits):
+    """相对截断：前 KEEP_AT_LEAST 组之后，向量相似度比最高者低出 SIMILARITY_GAP 以上、
+    且不是关键词前几名的，不再凑数返回。"""
+    if not hits:
+        return hits
+    best = max(h["similarity"] for h in hits)
+    return hits[:KEEP_AT_LEAST] + [
+        h for h in hits[KEEP_AT_LEAST:]
+        if best - h["similarity"] <= SIMILARITY_GAP or h.get("lexical_rank", RANK_DEPTH) < KEEP_AT_LEAST]
+
+
+def merge_table_copies(hits):
+    """不同文件收录的同一张大表只保留先命中的一条，其余记入 also_in。
+
+    同一张表须单位、列名一致（两份文件的表名常不同，不比较表名），且筛出的行内容相同；
+    没有筛到行时比较行标识的开头部分。"""
+    owners, kept = {}, []
+    for hit in hits:
+        rows = "".join(row["text"] for row in hit.get("table_rows", []))
+        content = rows or hit.get("row_keys", "")[:120]
+        mark = fingerprint(hit["signature"] + content) if content else ""
+        owner = owners.get(mark) if mark else None
+        if owner is None:
+            if mark:
+                owners[mark] = hit
+            kept.append(hit)
+            continue
+        owner["also_in"].append({"id": hit["id"], "title": hit["title"], "node_id": hit["node_id"],
+                                 "pages": hit["pages"], "citation": hit["citation"]})
+    return kept
+
+
+def merge_table_rows(item, hit):
+    """多查询命中同一张大表时，合并各查询筛出的行。"""
+    known = {row["row"] for row in item["table_rows"]}
+    item["table_rows"] = item["table_rows"] + [r for r in hit["table_rows"] if r["row"] not in known]
+    item["pages"] = sorted({r["page"] for r in item["table_rows"]}) or item["pages"]
+    item["page"] = item["pages"][0]
+    item["citation"] = f"/api/documents/{item['id']}#page={item['page']}"
+    item["warnings"] = list(dict.fromkeys(item["warnings"] + hit["warnings"]))
+    item["content"] = render_table_hit(item)
 
 
 def match_reference(name, library):
@@ -93,7 +147,7 @@ class Search:
                     if allowed is None or row.node_id in allowed]
         if not rows:
             return []
-        ranked = await asyncio.to_thread(self.rank, query, rows)
+        ranked, fused, similarity, lexical = await asyncio.to_thread(self.rank, query, rows)
         groups, owners, repeats = {}, {}, {}
         for index in ranked:
             row = rows[index]
@@ -134,13 +188,22 @@ class Search:
                 "id": first.document_id, "title": outline.title, "chunk_id": first.id,
                 "node_id": node["id"], "article_id": article["id"] if article else None,
                 "matched_chunk_ids": [row.id for row in group], "page": detail["pages"][0],
-                "pages": detail["pages"], "content": first.content, "source": detail["source"],
+                "pages": detail["pages"], "content": detail.get("expanded", first.content), "source": detail["source"],
                 "kind": node["kind"], "unit_id": node["unit_id"],
                 "excerpt_complete": node["kind"] != "table_row" and whole,
                 "boundary_status": node["boundary_status"],
                 "boundary_reasons": node["boundary_reasons"],
                 "citation": outline.citation(detail["pages"][0]),
                 "warnings": outline.warnings(detail["pages"]) + detail["warnings"]})
+            hits[-1].update(score=fused[first.node_id], similarity=similarity[first.node_id])
+            if first.node_id in lexical:
+                hits[-1]["lexical_rank"] = lexical[first.node_id]
+            if node["kind"] == "table" and not whole:
+                hits[-1].update(big_table=True, table_id=node["table_id"], label=node["label"])
+        # 表内筛行先用完整词（“办公用品”），筛不到再用细分词，避免碎片词误配“办公用房”。
+        hits = cut_weak(hits)
+        await self.attach_table_rows(hits, [terms(query, precise=True), terms(query)])
+        hits = merge_table_copies(hits)
         logger.info("正文检索 candidates=%d groups=%d", len(rows), len(hits))
         return hits
 
@@ -160,10 +223,11 @@ class Search:
         )
         semantic_order = [int(i) for i in np.argsort(-similarities)
                           if similarities[i] >= MIN_SIMILARITY]
-        scores, candidates = {}, set()
+        scores, candidates, places = {}, set(), []
         # 每路先限制阅读单元数；同一单元的多个子片段只贡献一次排名。
         for ranking in (lexical_order, semantic_order):
             groups = {}
+            places.append(groups)
             for index in ranking:
                 key = rows[index].node_id
                 if key not in groups:
@@ -172,8 +236,15 @@ class Search:
                     groups[key] = len(groups) + 1
                     scores[key] = scores.get(key, 0) + 1 / (60 + groups[key])
                 candidates.add(index)
-        return sorted(candidates,
-                      key=lambda i: (-scores[rows[i].node_id], -float(similarities[i]), i))
+        order = sorted(candidates,
+                       key=lambda i: (-scores[rows[i].node_id], -float(similarities[i]), i))
+        best = {}  # 阅读单元内各片段的最高向量相似度
+        for i in candidates:
+            key = rows[i].node_id
+            best[key] = max(best.get(key, -1.0), float(similarities[i]))
+        # 关键词路的名次（从 0 起），供相对截断保留字面命中靠前的单元。
+        lexical = {key: place - 1 for key, place in places[0].items()}
+        return order, scores, best, lexical
 
     async def search_bundle(self, queries, document_id=None, node_id=None, sent_cards=None):
         """Agent 用的检索：最多四个查询轮流合并，返回精简条目和尚未提供过的规则卡。
@@ -197,6 +268,8 @@ class Search:
                 if rank < len(hits):
                     hit = hits[rank]
                     if marks.setdefault(fingerprint(hit["content"]), hit["node_id"]) == hit["node_id"]:
+                        if hit["node_id"] in selected and hit.get("table_rows"):
+                            merge_table_rows(selected[hit["node_id"]], hit)
                         selected.setdefault(hit["node_id"], dict(hit))
         hits = list(selected.values())[:limit]
         for item in hits:

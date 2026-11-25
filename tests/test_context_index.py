@@ -118,7 +118,7 @@ def test_old_index_is_rejected_without_migration(tmp_path):
                 for index in await session.scalars(select(DocumentIndex)):
                     index.version = 'discarded-test-index'
         client.portal.call(make_obsolete)
-        with pytest.raises(ValueError, match='旧索引'):
+        with pytest.raises(ValueError, match='backend.reindex'):
             client.portal.call(kb.check_index)
         async def inspect():
             async with kb.db.sessions() as session:

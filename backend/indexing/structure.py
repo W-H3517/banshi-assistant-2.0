@@ -14,6 +14,48 @@ LOW_CONFIDENCE = "含低分识别文字，请对照原文"
 # 效力段、附件目录结束此前全部层级；通知结语在没有正式条款时结束编号项。
 END_ALL = ("附件：", "附件:")
 END_ITEMS = ("本通知", "特此通知")
+# 帽句与分点合计不超过该字数时整组一个阅读单元，否则分点各自成单元并带上帽句检索。
+LIST_MERGE_LIMIT = 300
+
+
+def join_section(cap, item):
+    offset = len(cap["content"]) + 2
+    pages = sorted(set(cap["pages"]) | set(item["pages"]))
+    reasons = list(dict.fromkeys(cap["boundary_reasons"] + item["boundary_reasons"]))
+    return {**cap, "content": cap["content"] + "\n\n" + item["content"], "pages": pages,
+            "source_spans": cap["source_spans"] + [
+                {**span, "start": span["start"] + offset, "end": span["end"] + offset}
+                for span in item["source_spans"]],
+            "boundary_status": "uncertain" if reasons else "confirmed",
+            "boundary_reasons": reasons}
+
+
+def group_lists(sections):
+    """短分点组并入帽句；长分点组保留各分点，并记下各自的帽句。"""
+    items = {}
+    for section in sections:
+        if section["kind"] == "item":
+            items.setdefault(section["cap_id"], []).append(section)
+    result = []
+    for section in sections:
+        group = items.get(section["id"])
+        if section["kind"] == "item":
+            if section.get("lead_id"):
+                result.append(section)
+            continue
+        if not group:
+            result.append(section)
+            continue
+        merged = section
+        for item in group:
+            merged = join_section(merged, item)
+        if len(merged["content"]) <= LIST_MERGE_LIMIT:
+            result.append(merged)
+        else:
+            for item in group:
+                item["lead_id"] = section["id"]
+            result.append({**section, "leads": True})
+    return result
 
 
 def source_path(by_id, node, body_heading_id=None):
@@ -72,9 +114,13 @@ def build_structure(sections, tables, title, filename):
         table = tables[section["table_id"]]
         node = table_nodes.get(table["id"])
         if node is None:
-            label = table["title"] or source_path(by_id, {"parent_id": parent})[0] or section["title"]
+            # 表名：表题 > 表前引导句 > 所属最近一级条目或标题。
+            chapter, article = source_path(by_id, {"parent_id": parent})
+            label = (table["title"] or table["lead"]
+                     or (article or chapter).split(" / ")[-1].split("\n")[0] or section["title"])
             node = table_nodes[table["id"]] = add(
                 "table", label, parent, sorted({f["page"] for f in table["fragments"]}))
+            node["table_id"] = table["id"]
             content, spans = grid_content(table, label)
             attach(node, "table", content, spans, table_ref={"table": table["id"]})
             node["warnings"] = [TABLE_WARNING]
@@ -82,6 +128,7 @@ def build_structure(sections, tables, title, filename):
             if row["section_id"] != section["id"]:
                 continue
             child = add("table_row", f"第 {row['row']} 行", node["id"], [row["page"]])
+            child["table_id"], child["row"] = table["id"], row["row"]
             content = row_content(table, row, node["label"])
             attach(child, "table_row", content,
                    [{"start": 0, "end": len(content), "page": row["page"]}],
@@ -90,10 +137,21 @@ def build_structure(sections, tables, title, filename):
             inherit_boundary(child, section)
 
     pending = None  # 上一段若是独立标题，其阅读单元只留给紧随其后的这一段
-    for section in sections:
+    section_units = {}  # 帽句段落 → 其阅读单元
+    for section in group_lists(sections):
         heading, pending = pending, None
         kind, content = section["kind"], section["content"].strip()
         if kind == "document_title":
+            continue
+        if kind == "item":
+            node = add("paragraph", section["title"],
+                       item["id"] if item else structural_parent(), section["pages"])
+            attach(node, "paragraph", section["content"], section["source_spans"],
+                   lead_unit_id=section_units[section["lead_id"]]["id"])
+            inherit_boundary(node, section)
+            if any(s.get("confidence") is not None and s["confidence"] < .9
+                   for s in section["source_spans"]):
+                node["warnings"] = [LOW_CONFIDENCE]
             continue
         if kind == "effect" or content.startswith(END_ALL):
             headings, formal, item = {}, None, None
@@ -122,7 +180,7 @@ def build_structure(sections, tables, title, filename):
             item = add("article", label, structural_parent(), section["pages"])
         if label and content == label:
             # 只有条号或编号的一行：正文在随后的段落里，本行只作条目标题。
-            pending = attach(nodes[-1], "article", section["content"], spans)
+            pending = section_units[section["id"]] = attach(nodes[-1], "article", section["content"], spans)
             continue
         parent_id = item["id"] if item else structural_parent()
         node = add("paragraph", section["title"], parent_id, section["pages"])
@@ -145,7 +203,10 @@ def build_structure(sections, tables, title, filename):
             ]
             node["pages"] = sorted(set(node["pages"]) | {span["page"] for span in heading["spans"]})
             extra["body_heading_id"] = parent_id
-        attach(node, "article_body" if kind == "article" else "paragraph", body, spans, **extra)
+        if section.get("leads"):
+            extra["leads"] = True
+        section_units[section["id"]] = attach(
+            node, "article_body" if kind == "article" else "paragraph", body, spans, **extra)
         inherit_boundary(node, section)
         if any(s.get("confidence") is not None and s["confidence"] < .9 for s in spans):
             node["warnings"] = [LOW_CONFIDENCE]

@@ -120,7 +120,7 @@ def test_history_scan_finds_documents_whose_rule_cards_were_sent():
     assert cards_in_history(history) == {"doc-1"}
 
 
-def test_two_malformed_calls_recover_and_narration_is_a_separate_paragraph(tmp_path):
+def test_two_malformed_calls_recover_and_narration_moves_into_process(tmp_path):
     requests, clients = [], []
 
     def call(arguments, content=None):
@@ -159,8 +159,12 @@ def test_two_malformed_calls_recover_and_narration_is_a_separate_paragraph(tmp_p
         assert '"type": "done"' in response.text, response.text
         saved = client.get(path).json()
         assert saved["status"] == "idle" and len(requests) == 5
-        assert saved["transcript"][-1]["text"] == "我先查一下相关制度。\n\n模拟标准为450元。"
-        assert '"text": "\\n\\n模拟标准为450元。"' in response.text
+        # 调用工具前的说明挂在那一步工具上，正文只留最后的回答，流里也不再补空行。
+        message = saved["transcript"][-1]
+        assert message["text"] == "模拟标准为450元。"
+        assert [t["note"] for t in message["tools"] if "note" in t] == ["我先查一下相关制度。"]
+        assert '"text": "模拟标准为450元。"' in response.text
+        assert '"note": "我先查一下相关制度。"' in response.text
         assert saved["transcript"][-1]["sources"]
         for transport in clients:
             client.portal.call(transport.aclose)

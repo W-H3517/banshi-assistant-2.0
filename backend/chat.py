@@ -43,7 +43,7 @@ def detail(conversation):
 
 
 SHOWN_ARGS = {"search_documents": ("queries",), "locate_document_structure": ("query",),
-              "ask_question": ("question",)}
+              "query_table": ("keywords", "columns"), "ask_question": ("question",)}
 
 
 def tool_input(name, args):
@@ -57,6 +57,8 @@ def tool_summary(name, content):
         return {key: len(content[key]) for key in ("items", "documents", "experiences")}
     if name == "locate_document_structure":
         return {"total": content["total"]}
+    if name == "query_table":
+        return {"rows": len(content["rows"])}
     return {"answer": content}  # 追问恢复时工具结果就是用户的回答
 
 
@@ -200,7 +202,7 @@ class ChatService:
             async for event in stream:
                 text = None
                 if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
-                    # 工具调用前的说明与之后的正式回答是两段文字，分段显示和保存。
+                    # 同一段文字里先后开始的文字块之间空一行。
                     text = ("\n\n" if assistant["text"] else "") + event.part.content
                 elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
                     text = event.delta.content_delta
@@ -208,6 +210,10 @@ class ChatService:
                     name = event.part.tool_name
                     tool = {"id": event.tool_call_id, "name": name, "status": "running",
                             "input": tool_input(name, event.part.args_as_dict())}
+                    if assistant["text"]:
+                        # 调用工具前说的话属于处理过程，挂在这一步上；正文只留最后的回答。
+                        # 前端收到带 note 的新步骤时清空已显示的正文。
+                        tool["note"], assistant["text"] = assistant["text"], ""
                     assistant["tools"].append(tool)
                     queue.put_nowait({"type": "tool", **tool})
                 elif isinstance(event, FunctionToolResultEvent):
@@ -232,6 +238,10 @@ class ChatService:
                             for page in doc.get("pages", [doc.get("page")]):
                                 cite(doc["id"], page, doc.get("title") or titles[doc["id"]],
                                      doc.get("node_id"))
+                    if succeeded and event.part.tool_name == "query_table":
+                        content = event.part.content
+                        for row in content["rows"]:
+                            cite(content["id"], row["page"], content["title"], row["node_id"])
                 if text:
                     assistant["text"] += text
                     queue.put_nowait({"type": "delta", "text": text})

@@ -50,7 +50,7 @@ def test_detect_scanned_and_reject_encrypted_empty_and_broken_pdf():
     class Recognizer:
         def extract_page(self, raw, number, view):
             return [{"text": "扫描内容", "confidence": .99, "boxes": [None] * 4,
-                     "polygon": [[10, 10], [90, 10], [90, 30], [10, 30]]}]
+                     "polygon": [[10, 10], [90, 10], [90, 30], [10, 30]]}], []
 
     page, = extract_pages(scanned.getvalue(), Recognizer())
     assert page["ocr"] and [b["method"] for b in page["blocks"]] == ["ocr"]

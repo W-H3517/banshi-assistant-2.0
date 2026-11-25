@@ -19,6 +19,8 @@ def test_reload_uses_importable_factory_and_inherits_log_mode(monkeypatch, mode)
         invocation.update(app=app, **kwargs)
 
     monkeypatch.setattr("backend.__main__.uvicorn.run", capture)
+    # 只验证启动参数；自检（模型、索引、端口）另有测试，不受本机是否已有后端在运行影响。
+    monkeypatch.setattr("backend.__main__.preflight.run", lambda settings: [])
     main()
     assert callable(import_from_string(invocation["app"]))
     assert invocation["factory"] is True

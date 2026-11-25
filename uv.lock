@@ -2,6 +2,9 @@ version = 1
 revision = 3
 requires-python = "==3.12.*"
 
+[manifest]
+overrides = [{ name = "opencv-python", marker = "sys_platform == 'never'" }]
+
 [[package]]
 name = "aiosqlite"
 version = "0.22.1"
@@ -61,6 +64,8 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "rank-bm25" },
+    { name = "rapid-layout" },
+    { name = "rapid-table" },
     { name = "rapidocr" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "tokenizers" },
@@ -92,6 +97,8 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "rank-bm25", specifier = ">=0.2.2" },
+    { name = "rapid-layout", specifier = "==1.2.1" },
+    { name = "rapid-table", specifier = "==3.0.2" },
     { name = "rapidocr", specifier = "==3.10.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
     { name = "tokenizers", specifier = ">=0.23.3" },
@@ -641,6 +648,15 @@ wheels = [
 ]
 
 [[package]]
+name = "opencv-python"
+version = "5.1.0.95"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/24/a2/97d6867da049747d3cd39ddddbe31d421eec42a2f4edadd2e20d5a84b1da/opencv_python-5.1.0.95.tar.gz", hash = "sha256:3d4a901a458e9503c92610f237850cfc970c66b3f1cc94f45f2942715280ebab", size = 83412736, upload-time = "2026-11-17T18:18:58.78Z" }
+
+[[package]]
 name = "opencv-python-headless"
 version = "5.0.0.93"
 source = { registry = "https://pypi.org/simple" }
@@ -1020,6 +1036,40 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/fc/0a/f9579384aa017d8b4c15613f86954b92a95a93d641cc849182467cf0bb3b/rank_bm25-0.2.2.tar.gz", hash = "sha256:096ccef76f8188563419aaf384a02f0ea459503fdf77901378d4fd9d87e5e51d", size = 8347, upload-time = "2022-02-16T12:10:52.196Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2a/21/f691fb2613100a62b3fa91e9988c991e9ca5b89ea31c0d3152a3210344f9/rank_bm25-0.2.2-py3-none-any.whl", hash = "sha256:7bd4a95571adadfc271746fa146a4bcfd89c0cf731e49c3d1ad863290adbe8ae", size = 8584, upload-time = "2022-02-16T12:10:50.626Z" },
+]
+
+[[package]]
+name = "rapid-layout"
+version = "1.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorlog" },
+    { name = "numpy" },
+    { name = "omegaconf" },
+    { name = "opencv-python", marker = "sys_platform == 'never'" },
+    { name = "pillow" },
+    { name = "requests" },
+    { name = "tqdm" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/82/0f/81d8f160f2b44b3fe42edfd4565d330e1119d4f6f8481435be504999c447/rapid_layout-1.2.1-py3-none-any.whl", hash = "sha256:7d424dcaa92c7cfd9c1c45bc6b323293a6461cf95cad605958fd0961f2397acf", size = 6875844, upload-time = "2026-03-24T01:53:27.043Z" },
+]
+
+[[package]]
+name = "rapid-table"
+version = "3.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorlog" },
+    { name = "numpy" },
+    { name = "omegaconf" },
+    { name = "onnxruntime" },
+    { name = "opencv-python", marker = "sys_platform == 'never'" },
+    { name = "pillow" },
+    { name = "requests" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/01/f4/eab5fa9ac4b00b47fc2be7f9e5b49c048cb61e5818ee17130f28a49333e7/rapid_table-3.0.2-py3-none-any.whl", hash = "sha256:1781dc80b4ec72a37a9dd6b987f41849968d99394caa6a8827e3eea0a4d99110", size = 43273, upload-time = "2026-04-23T10:49:15.216Z" },
 ]
 
 [[package]]

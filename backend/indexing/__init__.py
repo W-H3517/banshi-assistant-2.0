@@ -11,7 +11,7 @@ from .chunks import build_chunks
 from .rules import build_rule_card
 from .structure import build_structure
 
-INDEX_VERSION = "heading-body-v5"
+INDEX_VERSION = "table-rows-v9"
 OCR_WARNINGS = ["扫描识别的日期、数字和印章可能有误；高分不代表正确。",
                 "扫描页按单栏恢复，扫描表格和多栏需核对原文；文字页保留表格网格。"]
 

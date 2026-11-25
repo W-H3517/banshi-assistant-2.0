@@ -19,13 +19,13 @@ const auth = useAuthStore()
 const chat = useChatStore()
 const library = useLibraryStore()
 const experiences = useExperienceStore()
-const { scrollArea, scrollDown, send } = useChatSession()
+const { scrollArea, following, onScroll, scrollDown, jumpToLatest, send } = useChatSession()
 /** 右侧证据栏当前显示的制度片段或经验。 */
 const evidence = ref<Evidence | null>(null)
 
 const statusLabel: Record<string, string> = { waiting: '等待你的回答', failed: '生成失败', interrupted: '已中断' }
 const toolLabel: Record<string, string> = {
-  search_documents: '搜索正文', locate_document_structure: '定位制度', read_document_content: '读取内容', ask_question: '询问用户',
+  search_documents: '搜索正文', locate_document_structure: '定位制度', query_table: '查表格', read_document_content: '读取内容', ask_question: '询问用户',
 }
 const scopeLabel: Record<string, string> = { node: '所选段落', article: '整条条款', neighbors: '相邻段落', page: '原页核对' }
 const examples = [
@@ -60,6 +60,7 @@ function toolResult(tool: Tool) {
     return `命中制度 ${result.items} 条（来自 ${result.documents} 份文件）· 经验 ${result.experiences} 条`
   }
   if (tool.name === 'locate_document_structure') return `找到 ${result.total} 处`
+  if (tool.name === 'query_table') return `返回 ${result.rows} 行`
   if (result.experience !== undefined) return `经验全文 · ${result.experience}`
   const path = (result.path || []).filter(label => label !== result.title).join(' / ')
   const pages = result.pages?.length ? `第 ${result.pages.join('、')} 页` : ''
@@ -94,7 +95,7 @@ function composerKey(event: KeyboardEvent) {
 
 // 地址里的会话 ID 决定显示哪个会话；没有 ID 时是新对话。
 watch(() => route.params.id as string | undefined, async id => {
-  if (!id) { evidence.value = null; if (chat.current) chat.startNew(); return }
+  if (!id) { evidence.value = null; if (chat.current) chat.startNew(); await scrollDown(); return }
   if (id === chat.current?.id) { await scrollDown(); return }
   evidence.value = null
   try {
@@ -117,7 +118,7 @@ onMounted(() => guard(() => experiences.refresh()))
       <div v-if="!auth.modelReady" class="notice">
         <el-icon><WarningFilled /></el-icon>模型尚未配置，暂不能对话。知识库可正常使用。
       </div>
-      <div ref="scrollArea" class="scroll">
+      <div ref="scrollArea" class="scroll" @scroll="onScroll">
         <div v-if="!chat.messages.length" class="welcome">
           <div class="welcome-icon"><el-icon><ChatDotRound /></el-icon></div>
           <h1>你好，{{ auth.user?.name }}。今天要办什么事？</h1>
@@ -142,9 +143,10 @@ onMounted(() => guard(() => experiences.refresh()))
                     <li v-for="(tool, step) in message.tools" :key="tool.id">
                       <span class="step">{{ step + 1 }}</span>
                       <div>
+                        <p v-if="tool.note" class="note">{{ tool.note }}</p>
                         <strong>{{ toolLabel[tool.name] || tool.name }}</strong>
-                        <p v-if="tool.input.queries || tool.input.query || tool.input.question">
-                          <span v-for="query in tool.input.queries || []" :key="query" class="query">{{ query }}</span>
+                        <p v-if="tool.input.queries || tool.input.keywords || tool.input.query || tool.input.question">
+                          <span v-for="query in tool.input.queries || tool.input.keywords || []" :key="query" class="query">{{ query }}</span>
                           <span v-if="tool.input.query" class="query">{{ tool.input.query }}</span>
                           <template v-if="tool.input.question">{{ tool.input.question }}</template>
                         </p>
@@ -160,8 +162,9 @@ onMounted(() => guard(() => experiences.refresh()))
                   @document="(id, page) => openDocument(message, id, page)" @experience="openExperience"
                 />
                 <p v-else-if="chat.busy && index === chat.messages.length - 1" class="thinking">正在思考…</p>
-                <div v-if="message.sources?.length" class="sources">
-                  <span>查阅资料</span>
+                <details v-if="message.sources?.length" class="sources">
+                  <summary>查阅资料 {{ message.sources.length }} 条<el-icon class="chevron"><ArrowDown /></el-icon></summary>
+                  <div class="source-list">
                   <button
                     v-for="source in message.sources" :key="sourceKey(source)" :disabled="!available(source)"
                     :class="{ on: shown(source), gone: !available(source) }" @click="openSource(message, source)"
@@ -170,7 +173,8 @@ onMounted(() => guard(() => experiences.refresh()))
                     {{ source.title }}<template v-if="source.kind === 'document'"> · 第 {{ source.page }} 页</template>
                     <template v-if="!available(source)">{{ source.kind === 'experience' ? '（已下架）' : '（资料已删除）' }}</template>
                   </button>
-                </div>
+                  </div>
+                </details>
                 <button
                   v-if="message.text && !(chat.busy && index === chat.messages.length - 1)"
                   class="copy-answer" type="button" @click="copyAnswer(message.text)"
@@ -193,6 +197,9 @@ onMounted(() => guard(() => experiences.refresh()))
         </div>
       </div>
       <div class="composer-area">
+        <button v-if="!following && chat.messages.length" class="latest" type="button" @click="jumpToLatest">
+          <el-icon><ArrowDown /></el-icon>回到最新
+        </button>
         <div v-if="chat.busy" class="status">
           <span>正在处理你的问题…</span><el-button size="small" @click="guard(() => chat.stop())">停止生成</el-button>
         </div>
@@ -248,7 +255,7 @@ onMounted(() => guard(() => experiences.refresh()))
 .process summary { display: flex; align-items: center; gap: 8px; padding: 9px 12px; list-style: none; cursor: pointer; color: var(--text-2); }
 .process summary::-webkit-details-marker { display: none; }
 .chevron { margin-left: auto; transition: transform .15s; }
-.process[open] .chevron { transform: rotate(180deg); }
+.process[open] .chevron, .sources[open] .chevron { transform: rotate(180deg); }
 .process ol { margin: 0; padding: 2px 12px 12px; list-style: none; border-top: 1px solid var(--border); }
 .process li { display: grid; grid-template-columns: 22px 1fr; gap: 8px; padding-top: 10px; }
 .step { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--border-strong); background: var(--surface); font-size: var(--fs-xs); color: var(--text-3); }
@@ -256,9 +263,15 @@ onMounted(() => guard(() => experiences.refresh()))
 .process p { margin: 3px 0 0; line-height: 1.7; color: var(--text-2); overflow-wrap: anywhere; }
 .query { display: inline-block; padding: 1px 8px; margin: 2px 4px 2px 0; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); }
 .running { color: var(--text-3); }
+/* 模型调用工具前的说明：属于过程，比正文小、浅，左侧竖线与步骤内容区分。 */
+.process p.note { margin: 0 0 6px; padding-left: 8px; border-left: 2px solid var(--border-strong); font-size: var(--fs-xs); color: var(--text-3); white-space: pre-wrap; }
 
-.sources { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--border); }
-.sources > span { font-size: var(--fs-xs); color: var(--text-3); }
+/* 查阅资料默认折叠，只显示条数。 */
+.sources { margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--border); }
+.sources summary { display: inline-flex; align-items: center; gap: 4px; list-style: none; cursor: pointer; font-size: var(--fs-xs); color: var(--text-3); }
+.sources summary::-webkit-details-marker { display: none; }
+.sources summary:hover { color: var(--primary); }
+.source-list { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 .sources button { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 10px 3px 4px; border: 1px solid var(--border); border-radius: var(--radius-s); background: var(--surface); font-size: var(--fs-xs); color: var(--text-2); text-align: left; }
 .sources button:hover:not(:disabled) { border-color: var(--primary); }
 .sources button.on { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-line); }
@@ -276,7 +289,9 @@ onMounted(() => guard(() => experiences.refresh()))
 .options button { padding: 6px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-s); background: var(--surface); font-size: var(--fs-s); color: var(--text); }
 .options button.on { border-color: var(--primary); background: var(--primary); color: var(--on-primary); }
 
-.composer-area { padding: 8px 28px 16px; }
+.composer-area { position: relative; padding: 8px 28px 16px; }
+.latest { position: absolute; bottom: 100%; left: 50%; transform: translate(-50%, -8px); display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: 15px; background: var(--surface); box-shadow: var(--shadow); color: var(--text-2); font-size: var(--fs-xs); }
+.latest:hover { border-color: var(--primary); color: var(--primary); }
 .status { max-width: 780px; margin: 0 auto 8px; display: flex; align-items: center; justify-content: space-between; font-size: var(--fs-s); color: var(--text-3); }
 .composer { max-width: 780px; margin: 0 auto; padding: 12px 14px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-l); background: var(--surface); box-shadow: var(--shadow); }
 .composer:focus-within { border-color: var(--primary); }

@@ -13,7 +13,7 @@ import { api, isAbortError, sessionSignal, type Document } from '../api'
 interface Region { page: number; x: number; y: number; width: number; height: number }
 interface Chunk {
   ordinal: number; node_id: string; parent_id: string | null; title: string; pages: number[]; content: string
-  regions: Region[]; row?: number; header_pages?: number[]
+  regions: Region[]; row?: number; row_node_id?: string; header_pages?: number[]
   source: { document_title: string; filename: string; chapter: string; article: string }
   // 以下为诊断信息，后端只返回给管理员。
   token_count?: number; location_status?: 'complete' | 'partial' | 'unlocated'
@@ -57,7 +57,8 @@ const statusLabels = { complete: '已定位', partial: '部分定位，请核对
 const cited = computed(() => {
   const focus = new Set(props.focusNodes || [])
   return new Set((result.value?.chunks || [])
-    .filter(c => focus.has(c.node_id) || (c.parent_id !== null && focus.has(c.parent_id)))
+    .filter(c => focus.has(c.node_id) || (c.parent_id !== null && focus.has(c.parent_id))
+      || (c.row_node_id !== undefined && focus.has(c.row_node_id)))
     .map(c => c.ordinal))
 })
 const activeId = computed(() => hovered.value[0] ?? pinned.value)

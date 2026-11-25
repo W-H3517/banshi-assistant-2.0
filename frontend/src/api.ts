@@ -3,12 +3,15 @@ export interface User { id: string; username: string; name: string; role: string
 export interface DocumentSource { kind: 'document'; id: string; title: string; page: number; nodes: string[] }
 export interface ExperienceSource { kind: 'experience'; id: string; title: string }
 export type Source = DocumentSource | ExperienceSource
-/** 一次工具调用；input 是查了什么，result 是结果摘要，两者只用于展示检索过程。 */
+/**
+ * 一次工具调用；input 是查了什么，result 是结果摘要，两者只用于展示检索过程。
+ * note 是模型调用这一步前说的话（如“我先查一下…”），属于处理过程，不算正文；旧会话没有。
+ */
 export interface Tool {
-  id: string; name: string; status: string
-  input: { queries?: string[]; query?: string; scope?: string; page?: number; question?: string }
+  id: string; name: string; status: string; note?: string
+  input: { queries?: string[]; keywords?: string[]; columns?: string[]; query?: string; scope?: string; page?: number; question?: string }
   result?: {
-    items?: number; documents?: number; experiences?: number; total?: number
+    items?: number; documents?: number; experiences?: number; total?: number; rows?: number
     title?: string; path?: string[]; pages?: number[]; experience?: string; answer?: string
   }
 }

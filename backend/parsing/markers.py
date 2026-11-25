@@ -31,6 +31,36 @@ def heading_level(text):
     return None
 
 
+CHINESE_DIGITS = "零一二三四五六七八九"
+# 分点编号，按层级从高到低；层级越小越靠外。
+ITEM_MARKERS = (
+    re.compile(r"^([一二三四五六七八九十]+)、"),
+    re.compile(r"^[（(]([一二三四五六七八九十]+)[）)]"),
+    re.compile(r"^(\d+)[.．、](?!\d)"),
+    re.compile(r"^[（(](\d+)[）)]"),
+    re.compile(r"^([①-⑳])"),
+)
+
+
+def chinese_number(text):
+    if "①" <= text <= "⑳":
+        return ord(text) - ord("①") + 1
+    if text.isdigit():
+        return int(text)
+    tens, _, ones = text.rpartition("十")
+    if "十" not in text:
+        return CHINESE_DIGITS.index(text)
+    return (CHINESE_DIGITS.index(tens) if tens else 1) * 10 + (CHINESE_DIGITS.index(ones) if ones else 0)
+
+
+def item_marker(text):
+    """行首分点编号：返回 (层级, 序号, 编号原文)，不是分点时返回 None。"""
+    for level, pattern in enumerate(ITEM_MARKERS):
+        if match := pattern.match(text.lstrip()):
+            return level, chinese_number(match[1]), match[0]
+    return None
+
+
 def article_label(text):
     """正式条号取“第…条”；编号问答取到问号，编号短句取到首个句号。"""
     match = ARTICLE.match(text)

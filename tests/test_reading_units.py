@@ -19,7 +19,7 @@ from backend.indexing import prepare_document
 from backend.knowledge import KnowledgeBase
 from backend.parsing.ocr import LocalOCR
 from backend.parsing.sections import assemble_document
-from backend.reindex import apply, prepare
+from backend.reindex import rebuild
 from tests.pdf_helpers import make_pdf
 from tests.test_app import login
 
@@ -69,6 +69,7 @@ def test_mixed_pages_keep_tables_and_question_across_footer(tmp_path, monkeypatc
                  [900, 180], [100, 180]], "words": []}]
 
     monkeypatch.setattr(LocalOCR, "recognize", recognize)
+    monkeypatch.setattr(LocalOCR, "find_tables", lambda *args: [])
     _, snapshot = prepare_document(output.getvalue(), "mixed.pdf", LocalEmbeddings(Settings().model_cache_dir), LocalOCR(tmp_path))
     assert len(calls) == 1 and snapshot["meta"]["ocr_pages"] == [4]
     units = snapshot["units"]
@@ -117,13 +118,12 @@ def test_unknown_boundary_is_not_complete_and_raw_page_is_available(tmp_path):
             client.portal.call(kb.read, target, "page", 1, None, 2)
 
 
-def test_explicit_reindex_rolls_back_and_preserves_originals(tmp_path, monkeypatch):
+def test_reindex_rebuilds_from_stored_pdfs_and_rolls_back_on_failure(tmp_path, monkeypatch):
     settings = Settings(data_dir=tmp_path / "app")
     with TestClient(create_app(settings)) as client:
         login(client)
         db = client.app.state.db
         conversation = client.post("/api/conversations").json()
-        output = tmp_path / "prepared"
 
         async def state():
             async with db.sessions() as session:
@@ -133,7 +133,6 @@ def test_explicit_reindex_rolls_back_and_preserves_originals(tmp_path, monkeypat
                             DocumentIndex.document_id))))
 
         before = client.portal.call(state)
-        client.portal.call(prepare, db, settings, output)
         original_store = KnowledgeBase.store_index
         calls = []
 
@@ -145,10 +144,39 @@ def test_explicit_reindex_rolls_back_and_preserves_originals(tmp_path, monkeypat
 
         monkeypatch.setattr(KnowledgeBase, "store_index", staticmethod(failing_store))
         with pytest.raises(RuntimeError, match="after delete"):
-            client.portal.call(apply, db, output)
+            client.portal.call(rebuild, db, settings)
         assert client.portal.call(state) == before
         monkeypatch.setattr(KnowledgeBase, "store_index", staticmethod(original_store))
-        client.portal.call(apply, db, output)
+        client.portal.call(rebuild, db, settings)
         after = client.portal.call(state)
+        # 原 PDF 与文档 ID 不变，片段与索引代次全部换新。
         assert before[0] == after[0] and not before[1].intersection(after[1]) and before[2] != after[2]
         assert client.get(f"/api/conversations/{conversation['id']}").json() == conversation
+
+
+def test_reindex_command_clears_running_left_by_a_crash(tmp_path, monkeypatch):
+    import asyncio
+    import sys
+
+    from backend import reindex
+    from backend.db import Conversation
+
+    settings = Settings(data_dir=tmp_path / "app")
+    with TestClient(create_app(settings)) as client:
+        login(client)
+        conversation = client.post("/api/conversations").json()
+        db = client.app.state.db
+
+        async def crash():
+            async with db.sessions.begin() as session:
+                (await session.get(Conversation, conversation["id"])).status = "running"
+        client.portal.call(crash)
+    monkeypatch.setattr(sys, "argv", ["reindex", "--data-dir", str(settings.data_dir)])
+    monkeypatch.setattr(reindex, "check_port", list)
+    asyncio.run(reindex.main())
+    with TestClient(create_app(settings)) as client:
+        login(client)
+        assert client.get(f"/api/conversations/{conversation['id']}").json()["status"] == "interrupted"
+    monkeypatch.setattr(reindex, "check_port", lambda: ["端口被占用"])
+    with pytest.raises(SystemExit, match="后端正在运行"):
+        asyncio.run(reindex.main())

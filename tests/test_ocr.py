@@ -56,6 +56,7 @@ def fake_recognizer(monkeypatch):
         return lines
 
     monkeypatch.setattr(LocalOCR, "recognize", recognize)
+    monkeypatch.setattr(LocalOCR, "find_tables", lambda *args: [])
     return calls
 
 

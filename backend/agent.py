@@ -15,7 +15,7 @@ SearchQueries = Annotated[list[SearchText], Field(min_length=1, max_length=MAX_S
                           BeforeValidator(lambda value: [value] if isinstance(value, str) else value)]
 
 INSTRUCTIONS = """你是部门办事助手。根据用户问题自主决定直接回答、问问题或查资料。
-可用工具为 ask_question（问问题）和 search_documents（搜索正文）。不必每次调用工具。
+可用工具为 ask_question（问问题）、search_documents（搜索正文）和 query_table（查表格）。不必每次调用工具。
 每次模型响应最多调用一次search_documents，queries放1至4个查询。先查最直接相关的事项，核对结果后再补查仍缺依据的事项。
 至少一条查询保留用户问题里决定适用范围的具体条件，例如地区、类别、费用承担方或所涉费用组合。
 单查询最多六组命中，多个查询轮流合并去重，合计最多为查询数的五倍；不要把参考答案或臆测金额写入查询。
@@ -32,7 +32,8 @@ items带reused时表示这轮此前已提供相同片段，正文沿用前面的
 涉及制度、材料、步骤、限额时必须查资料；使用具体问题或关键词检索，必要时换说法或限定范围搜索。
 先核对已经取得的证据，只补查尚缺的条件或原文。依据已经齐全时结束查阅；问题限定在库内且已明确指向未入库办法时，说明缺失即可。
 片段中的文件、章节和条目字段表示所属来源；引用时优先指明已有章节和条号，不补造缺失层级。
-问题需要的席别、金额或其他字段在表格里时，搜索对应行并核对字段、单位和解析警告。
+表格命中分两种：kind=table 是整张小表，正文已含全部行；kind=table_card 是大表，正文为表名、单位、列，并附按查询词筛出的相关行。
+大表附带的行不含所需条件，或未筛到行时，用 query_table 传该命中的 node_id 和表中写法的关键词（如地区、类别、职级）查行；表内大多数行都有的词会被忽略。按字段、单位和 citation 作答，核对承接上页的字段与解析警告。
 片段可能不完整，注意例外、适用范围及跨页条件；依据不足时说明缺失内容，并给出已有引用供用户核对原文。
 扫描资料的工具结果会附识别警告，日期、金额和盖章区域应提示核对原 PDF，不把识别分数视为正确性保证。
 回答引用必须使用工具返回的 citation，格式为 [制度标题，第 N 页](citation)，指出对应条款。
@@ -124,6 +125,21 @@ def create_agent(settings: Settings, user_id: str, db: Database, *, model=None):
             seen_fragments = fragments_in_current_turn(ctx.messages)
             search_run_id = ctx.run_id
         return reuse_search_fragments(result, seen_fragments)
+
+    @agent.tool_plain(strict=False)
+    async def query_table(table_id: str, keywords: list[str] | None = None,
+                          columns: list[str] | None = None) -> dict:
+        """在一张表里按关键词筛选行，返回字段、单位和每行引用。
+
+        Args:
+            table_id: 搜索结果里 kind 为 table 或 table_card 的 node_id。
+            keywords: 行里应出现的值，用表中写法，如["四川","宜宾"]、["二类培训"]；省略则按顺序返回前20行。按关键词在表内的少见程度排序，大多数行都有的词不参与筛选。
+            columns: 只保留名称含这些词的列，如["住宿费","旺季"]；省略返回全部列。
+        """
+        try:
+            return await db.knowledge.query_table(table_id, keywords or [], columns or [])
+        except ValueError as exc:
+            raise ModelRetry(str(exc)) from None
 
     @agent.tool_plain(strict=False)
     async def ask_question(question: str, options: list[str] | None = None) -> str:

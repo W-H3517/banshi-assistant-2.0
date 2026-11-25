@@ -9,12 +9,13 @@ from .experiences import Experiences
 from .library import DuplicateDocument, Library, public_document
 from .reading import Reading
 from .search import MAX_RESULTS, Search, terms
+from .tables import Tables
 
 __all__ = ["MAX_RESULTS", "DuplicateDocument", "KnowledgeBase", "public_document", "terms"]
 logger = logging.getLogger(__name__)
 
 
-class KnowledgeBase(Library, Search, Reading, Experiences):
+class KnowledgeBase(Library, Search, Reading, Experiences, Tables):
     def __init__(self, db, embeddings, ocr=None):
         self.db = db
         self.embeddings = embeddings

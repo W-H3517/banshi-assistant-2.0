@@ -146,7 +146,15 @@ def test_row_retrieval_text_joins_header_path_and_omits_blanks():
     table, = build_tables([fragment(1, 1, values, boxes=boxes)])
     assert table["columns"] == ["年份", "地区（列 2）", "地区（列 3）", "住宿费标准 / 三类",
                                 "旺季浮动标准 / 期间", "备注"]
-    table["unit"] = "元/人·天"
     text = row_retrieval_text(table, table["rows"][0])
-    # 年份不是 1、2、3… 的序号，照常保留。
-    assert text == "年份：2025；地区：大连；地区：全市；住宿费标准三类：350；旺季浮动标准期间：7-9月（元/人·天）"
+    # 年份不是 1、2、3… 的序号，照常保留；同名的相邻列（省、市）合成一个字段，单位由片段前缀给出。
+    assert text == "年份：2025；地区：大连 全市；住宿费标准三类：350；旺季浮动标准期间：7-9月"
+
+
+def test_header_digits_stay_when_they_tell_columns_apart():
+    values = [["项目", "方案1", "方案2", "标准8"], ["培训", "300", "500", "按次"],
+              ["会议", "200", "400", "按天"]]
+    table, = build_tables([fragment(1, 1, values)])
+    # “方案1/方案2”去掉数字会重名，数字属于列名；“标准8”的 8 是脚注编号。
+    assert table["columns"] == ["项目", "方案1", "方案2", "标准"]
+    assert row_retrieval_text(table, table["rows"][0]) == "项目：培训；方案1：300；方案2：500；标准：按次"
