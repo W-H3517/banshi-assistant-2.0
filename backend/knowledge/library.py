@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from ..config import ROOT
 from ..db import Chunk, Conversation, Document, DocumentIndex, SeedImport, User
 from ..indexing import INDEX_VERSION, prepare_document
+from ..preflight import stale_message
 from .outline import normalize_label
 
 logger = logging.getLogger(__name__)
@@ -63,11 +64,13 @@ class Library:
         ) for chunk, vector in zip(snapshot["chunks"], vectors, strict=True)])
 
     async def check_index(self):
+        """启动兜底检查（正常由 backend.preflight 先查）：索引版本不符时中止，提示用脚本重建。"""
         async with self.db.sessions() as session:
-            versions = (await session.execute(
-                select(Document.id, DocumentIndex.version).outerjoin(DocumentIndex))).all()
-        if any(version != INDEX_VERSION for _, version in versions):
-            raise ValueError("发现旧索引；本版本不兼容或自动迁移旧数据，请按开发约定处理旧运行库")
+            rows = (await session.execute(
+                select(Document.title, DocumentIndex.version).outerjoin(DocumentIndex))).all()
+        stale = [(title, version) for title, version in rows if version != INDEX_VERSION]
+        if stale:
+            raise ValueError(stale_message(stale))
 
     async def seed(self):
         async with self.db.sessions() as session:

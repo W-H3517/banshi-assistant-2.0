@@ -1,10 +1,12 @@
 """本地 CPU 嵌入；模型下载与正常服务运行分离。"""
 
 import threading
+from pathlib import Path
 
 import numpy as np
 from fastembed import TextEmbedding
 from huggingface_hub import snapshot_download
+from huggingface_hub.errors import LocalEntryNotFoundError
 from tokenizers import Tokenizer
 
 MODEL_NAME = "BAAI/bge-small-zh-v1.5"
@@ -13,14 +15,28 @@ MODEL_REVISION = "46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59"
 QUERY_PREFIX = "为这个句子生成表示以用于检索相关文章："
 
 
-class LocalEmbeddings:
-    def __init__(self, cache_dir, *, download=False):
-        model_path = snapshot_download(
+MISSING = "本地嵌入模型未准备，请先运行 uv run --locked python -m backend.prepare"
+
+
+def local_model_path(cache_dir, *, download=False):
+    """嵌入模型快照目录；download=False 时只用本地缓存，缺失时给出准备命令。"""
+    try:
+        path = snapshot_download(
             repo_id=MODEL_REPO, revision=MODEL_REVISION, cache_dir=str(cache_dir),
             local_files_only=not download,
             allow_patterns=["config.json", "model_optimized.onnx", "special_tokens_map.json",
                             "tokenizer.json", "tokenizer_config.json"],
         )
+    except LocalEntryNotFoundError:
+        raise RuntimeError(MISSING) from None
+    if not (Path(path) / "model_optimized.onnx").is_file():
+        raise RuntimeError(MISSING)
+    return path
+
+
+class LocalEmbeddings:
+    def __init__(self, cache_dir, *, download=False):
+        model_path = local_model_path(cache_dir, download=download)
         self.model = TextEmbedding(
             model_name=MODEL_NAME, cache_dir=str(cache_dir), threads=2,
             specific_model_path=model_path, local_files_only=True,
