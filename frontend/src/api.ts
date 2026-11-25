@@ -9,9 +9,9 @@ export type Source = DocumentSource | ExperienceSource
  */
 export interface Tool {
   id: string; name: string; status: string; note?: string
-  input: { queries?: string[]; query?: string; scope?: string; page?: number; question?: string }
+  input: { queries?: string[]; keywords?: string[]; columns?: string[]; query?: string; scope?: string; page?: number; question?: string }
   result?: {
-    items?: number; documents?: number; experiences?: number; total?: number
+    items?: number; documents?: number; experiences?: number; total?: number; rows?: number
     title?: string; path?: string[]; pages?: number[]; experience?: string; answer?: string
   }
 }

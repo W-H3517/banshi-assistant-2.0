@@ -43,7 +43,7 @@ def detail(conversation):
 
 
 SHOWN_ARGS = {"search_documents": ("queries",), "locate_document_structure": ("query",),
-              "ask_question": ("question",)}
+              "query_table": ("keywords", "columns"), "ask_question": ("question",)}
 
 
 def tool_input(name, args):
@@ -57,6 +57,8 @@ def tool_summary(name, content):
         return {key: len(content[key]) for key in ("items", "documents", "experiences")}
     if name == "locate_document_structure":
         return {"total": content["total"]}
+    if name == "query_table":
+        return {"rows": len(content["rows"])}
     return {"answer": content}  # 追问恢复时工具结果就是用户的回答
 
 
@@ -236,6 +238,10 @@ class ChatService:
                             for page in doc.get("pages", [doc.get("page")]):
                                 cite(doc["id"], page, doc.get("title") or titles[doc["id"]],
                                      doc.get("node_id"))
+                    if succeeded and event.part.tool_name == "query_table":
+                        content = event.part.content
+                        for row in content["rows"]:
+                            cite(content["id"], row["page"], content["title"], row["node_id"])
                 if text:
                     assistant["text"] += text
                     queue.put_nowait({"type": "delta", "text": text})

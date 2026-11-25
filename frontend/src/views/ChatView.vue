@@ -25,7 +25,7 @@ const evidence = ref<Evidence | null>(null)
 
 const statusLabel: Record<string, string> = { waiting: '等待你的回答', failed: '生成失败', interrupted: '已中断' }
 const toolLabel: Record<string, string> = {
-  search_documents: '搜索正文', locate_document_structure: '定位制度', read_document_content: '读取内容', ask_question: '询问用户',
+  search_documents: '搜索正文', locate_document_structure: '定位制度', query_table: '查表格', read_document_content: '读取内容', ask_question: '询问用户',
 }
 const scopeLabel: Record<string, string> = { node: '所选段落', article: '整条条款', neighbors: '相邻段落', page: '原页核对' }
 const examples = [
@@ -60,6 +60,7 @@ function toolResult(tool: Tool) {
     return `命中制度 ${result.items} 条（来自 ${result.documents} 份文件）· 经验 ${result.experiences} 条`
   }
   if (tool.name === 'locate_document_structure') return `找到 ${result.total} 处`
+  if (tool.name === 'query_table') return `返回 ${result.rows} 行`
   if (result.experience !== undefined) return `经验全文 · ${result.experience}`
   const path = (result.path || []).filter(label => label !== result.title).join(' / ')
   const pages = result.pages?.length ? `第 ${result.pages.join('、')} 页` : ''
@@ -144,8 +145,8 @@ onMounted(() => guard(() => experiences.refresh()))
                       <div>
                         <p v-if="tool.note" class="note">{{ tool.note }}</p>
                         <strong>{{ toolLabel[tool.name] || tool.name }}</strong>
-                        <p v-if="tool.input.queries || tool.input.query || tool.input.question">
-                          <span v-for="query in tool.input.queries || []" :key="query" class="query">{{ query }}</span>
+                        <p v-if="tool.input.queries || tool.input.keywords || tool.input.query || tool.input.question">
+                          <span v-for="query in tool.input.queries || tool.input.keywords || []" :key="query" class="query">{{ query }}</span>
                           <span v-if="tool.input.query" class="query">{{ tool.input.query }}</span>
                           <template v-if="tool.input.question">{{ tool.input.question }}</template>
                         </p>

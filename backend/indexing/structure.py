@@ -114,9 +114,13 @@ def build_structure(sections, tables, title, filename):
         table = tables[section["table_id"]]
         node = table_nodes.get(table["id"])
         if node is None:
-            label = table["title"] or source_path(by_id, {"parent_id": parent})[0] or section["title"]
+            # 表名：表题 > 表前引导句 > 所属最近一级条目或标题。
+            chapter, article = source_path(by_id, {"parent_id": parent})
+            label = (table["title"] or table["lead"]
+                     or (article or chapter).split(" / ")[-1].split("\n")[0] or section["title"])
             node = table_nodes[table["id"]] = add(
                 "table", label, parent, sorted({f["page"] for f in table["fragments"]}))
+            node["table_id"] = table["id"]
             content, spans = grid_content(table, label)
             attach(node, "table", content, spans, table_ref={"table": table["id"]})
             node["warnings"] = [TABLE_WARNING]
@@ -124,6 +128,7 @@ def build_structure(sections, tables, title, filename):
             if row["section_id"] != section["id"]:
                 continue
             child = add("table_row", f"第 {row['row']} 行", node["id"], [row["page"]])
+            child["table_id"], child["row"] = table["id"], row["row"]
             content = row_content(table, row, node["label"])
             attach(child, "table_row", content,
                    [{"start": 0, "end": len(content), "page": row["page"]}],

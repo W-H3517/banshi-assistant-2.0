@@ -11,7 +11,7 @@ def main():
     embeddings = LocalEmbeddings(settings.model_cache_dir, download=True)
     result = embeddings.query("出差住宿报销限额")
     print(f"模型准备完成，本地 CPU 推理通过，向量维数：{len(result)}", flush=True)
-    print("准备 RapidOCR 本地识别模型", flush=True)
+    print("准备 RapidOCR 本地识别模型及扫描表格的版面、表格结构模型", flush=True)
     model_paths(settings.model_cache_dir, download=True)
     print("OCR 模型准备完成，文件校验通过", flush=True)
 

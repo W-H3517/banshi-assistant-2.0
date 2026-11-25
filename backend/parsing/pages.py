@@ -68,8 +68,14 @@ def native_blocks(page, info):
 
 
 def ocr_blocks(ocr, raw, info):
-    blocks = []
-    for line in ocr.extract_page(raw, info["number"], info["view_box"]):
+    """扫描页：表格区域按单元格网格输出表格块，其余 OCR 行作正文。"""
+    lines, tables = ocr.extract_page(raw, info["number"], info["view_box"])
+    blocks = [{"kind": "table", "bbox": table["bbox"], "method": "ocr", "confidence": None,
+               "table_data": {"grid": table["grid"], "column_positions": table["column_positions"],
+                              "method": "ocr"},
+               "text": "\n".join(" | ".join(cell["value"] for cell in row) for row in table["grid"])}
+              for table in tables]
+    for line in lines:
         polygon = line["polygon"]
         blocks.append({"kind": "text", "text": line["text"], "boxes": line["boxes"],
                        "bbox": [min(p[0] for p in polygon), min(p[1] for p in polygon),

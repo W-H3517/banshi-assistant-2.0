@@ -69,6 +69,7 @@ def test_mixed_pages_keep_tables_and_question_across_footer(tmp_path, monkeypatc
                  [900, 180], [100, 180]], "words": []}]
 
     monkeypatch.setattr(LocalOCR, "recognize", recognize)
+    monkeypatch.setattr(LocalOCR, "find_tables", lambda *args: [])
     _, snapshot = prepare_document(output.getvalue(), "mixed.pdf", LocalEmbeddings(Settings().model_cache_dir), LocalOCR(tmp_path))
     assert len(calls) == 1 and snapshot["meta"]["ocr_pages"] == [4]
     units = snapshot["units"]

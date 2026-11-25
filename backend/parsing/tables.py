@@ -10,7 +10,11 @@ from itertools import pairwise
 NUMERIC = re.compile(r"\d+(?:\.\d+)?")
 UNIT = re.compile(r"单位\s*[:：]\s*([^\n]+)")
 TOLERANCE = 2  # PDF 点：判断列边界一致和页首、页尾对齐
+OCR_TOLERANCE = 6  # 扫描页表格线由图像检测得到，位置误差更大
 CAPTION_LIMIT = 250
+LEAD_LIMIT = 80  # 表前引导句（如“综合定额标准如下表：”）最多取的字数
+FOOTNOTE_MARK = re.compile(r"(?<=[一-鿿）)])\d{1,2}$")  # 表头末尾的脚注编号，如“标准8”
+NOTE_START = ("注：", "注:", "备注", "说明：", "说明:")
 
 
 def cell_text(value):
@@ -69,7 +73,58 @@ def header_depth(grid):
                     if any(NUMERIC.fullmatch(cell["value"]) for cell in row)), None)
     if numeric is not None:
         depth = min(depth, numeric)
+    if depth == 1 and headerless(grid):
+        return 0
     return min(depth, len(grid))
+
+
+def shared_suffix(a, b):
+    size = 0
+    while size < min(len(a), len(b)) and a[-1 - size] == b[-1 - size]:
+        size += 1
+    return size
+
+
+def headerless(grid):
+    """首行与下方数据同类（如“结婚慰问”与“生育慰问”“住院慰问”）时，表格没有表头。
+
+    逐列比较首行与其下各值的共同词尾；过半的列都像数据时判为无表头。
+    """
+    if len(grid) < 3:
+        return False
+    alike = 0
+    for col, head in enumerate(grid[0]):
+        values = [row[col]["value"] for row in grid[1:] if row[col]["value"]]
+        if head["value"] and values and sum(
+                shared_suffix(head["value"].rstrip("。"), v.rstrip("。")) >= 2 for v in values) * 2 >= len(values):
+            alike += 1
+    return alike * 2 >= len(grid[0])
+
+
+def column_name(cell):
+    return FOOTNOTE_MARK.sub("", cell["value"])
+
+
+def trailing_lead(section):
+    """表格前一段的末句：返回 (引导句, 单位)。
+
+    只有像表格引子的末句（以冒号结尾或含“如下”“下表”）才作引导句；过长时取最后的分句，
+    去掉“如下表”等套话后不足 6 字的不用。单位从末句里的“单位：”读取。
+    """
+    sentence = re.split(r"(?<=[。！？\n])", section["content"].strip())[-1].strip()
+    unit = UNIT.search(sentence)
+    sentence = UNIT.sub("", sentence).strip()
+    if not (sentence.endswith(("：", ":")) or re.search(r"如下|下表", sentence)):
+        return None, unit[1].strip() if unit else None
+    if len(sentence) > LEAD_LIMIT:
+        sentence = re.split(r"[，；,;]", sentence)[-1].strip()
+    lead = strip_intro(sentence)
+    return (lead if len(lead) >= 6 else None), unit[1].strip() if unit else None
+
+
+def strip_intro(text):
+    """去掉“请参考下表：”“如下：”等引出表格的套话。"""
+    return re.sub(r"[，,]?\s*(?:具体|详见|见|请参考)?(?:如下表|如下|下表)$", "", text.strip().rstrip("：: "))
 
 
 def read_caption(section):
@@ -78,7 +133,7 @@ def read_caption(section):
     unit = UNIT.search(text)
     sources = [{"page": s["page"], "block_id": s.get("block_id"), "start": s["start"], "end": s["end"]}
                for s in section["source_spans"] if "单位" in text[s["start"]:s["end"]]]
-    return (UNIT.sub("", text).strip() if "表" in text else None,
+    return (strip_intro(UNIT.sub("", text)) if "表" in text else None,
             unit[1].strip() if unit else None, sources if unit else [])
 
 
@@ -92,7 +147,7 @@ def repeated_header(table, grid):
     return depth if same else 0
 
 
-def inherit_keys(table, body, bottom):
+def inherit_keys(table, body, bottom, tolerance=TOLERANCE):
     """分页截断的合并单元格在续页显示为空白：只延续行首连续空白的行标识列。
 
     行标识列须在此前每一数据行都有值，且除首列序号外不是数值列；
@@ -109,8 +164,8 @@ def inherit_keys(table, body, bottom):
         measure = col and sum(bool(NUMERIC.fullmatch(v)) for v in values) * 2 > len(values)
         origin = last["cells"][col]
         if (not all(values) or measure or not first["bbox"] or not origin["bbox"]
-                or abs(first["bbox"][1] - top) > TOLERANCE
-                or abs(origin["bbox"][3] - bottom) > TOLERANCE):
+                or abs(first["bbox"][1] - top) > tolerance
+                or abs(origin["bbox"][3] - bottom) > tolerance):
             continue
         source = origin.get("inherited_from") or {
             "page": last["page"], "bbox": origin["bbox"], "row": origin["source_row"],
@@ -129,17 +184,21 @@ def serial_column(rows):
     return len(values) >= 2 and values == [str(i) for i in range(1, len(values) + 1)]
 
 
-def new_table(number, grid, page, caption):
+def new_table(number, grid, page, caption, before):
     depth = header_depth(grid)
     title, unit, unit_sources = read_caption(caption) if caption else (None, None, [])
-    names = [" / ".join(dict.fromkeys(row[col]["value"] for row in grid[:depth]
-                                      if row[col]["value"])) or f"未识别字段（列 {col + 1}）"
+    lead, tail_unit = (trailing_lead(before) if before is not None and before["kind"] != "table"
+                       else (None, None))
+    unit = unit or tail_unit
+    names = [" / ".join(dict.fromkeys(column_name(row[col]) for row in grid[:depth]
+                                      if row[col]["value"])) or
+             (f"列 {col + 1}" if depth == 0 else f"未识别字段（列 {col + 1}）")
              for col in range(len(grid[0]))]
     # 同名父级表头横跨多列时保留列号，避免把不同字段拼成一个。
     columns = [f"{name}（列 {i + 1}）" if names.count(name) > 1 else name
                for i, name in enumerate(names)]
-    return {"id": f"t{number}", "title": title, "unit": unit, "unit_sources": unit_sources,
-            "columns": columns, "header_pages": [page],
+    return {"id": f"t{number}", "title": title, "lead": lead, "notes": None,
+            "unit": unit, "unit_sources": unit_sources, "columns": columns, "header_pages": [page],
             "header_cells": [{"column": col + 1, "path": names[col], "page": page,
                               "cells": [row[col] for row in grid[:depth]]}
                              for col in range(len(grid[0]))],
@@ -160,21 +219,22 @@ def build_tables(sections):
         page = section["pages"][0]
         before = sections[index - 1] if index else None
         previous = tables[-1]["fragments"][-1] if tables else None
+        tolerance = OCR_TOLERANCE if data.get("method") == "ocr" else TOLERANCE
         continued = (before is not None and before["kind"] == "table"
                      and previous["page"] + 1 == page
                      and len(previous["positions"]) == len(data["column_positions"])
-                     and all(abs(a - b) < TOLERANCE for a, b in
+                     and all(abs(a - b) < tolerance for a, b in
                              zip(previous["positions"], data["column_positions"])))
         if continued:
             table = tables[-1]
             header_rows = repeated_header(table, grid)
             if header_rows:
                 table["header_pages"].append(page)
-            inherit_keys(table, grid[header_rows:], previous["bottom"])
+            inherit_keys(table, grid[header_rows:], previous["bottom"], tolerance)
         else:
             caption = (before if before is not None and before["kind"] == "text"
                        and len(before["content"]) < CAPTION_LIMIT else None)
-            table = new_table(len(tables) + 1, grid, page, caption)
+            table = new_table(len(tables) + 1, grid, page, caption, before)
             if caption and (table["title"] or table["unit"]):
                 caption["caption_of"] = table["id"]
             header_rows = len(table["header_cells"][0]["cells"])
@@ -188,6 +248,11 @@ def build_tables(sections):
             "row_count": len(grid), "positions": data["column_positions"],
             "bottom": max(cell["bbox"][3] for row in grid for cell in row if cell["bbox"])})
         section["table_id"] = table["id"]
+    positions = {section["id"]: index for index, section in enumerate(sections)}
     for table in tables:
         table["serial"] = serial_column(table["rows"])
+        # 紧随表格的“注：”段落作为表注。
+        after = positions[table["fragments"][-1]["section_id"]] + 1
+        if after < len(sections) and sections[after]["content"].strip().startswith(NOTE_START):
+            table["notes"] = sections[after]["content"].strip()[:300]
     return tables

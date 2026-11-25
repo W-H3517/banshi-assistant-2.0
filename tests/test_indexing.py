@@ -149,7 +149,10 @@ def test_table_chunks_highlight_shared_source_cells():
                                ("SPAN", (0, 1), (0, 2))]))
     SimpleDocTemplate(stream).build([table])
     result = indexed(stream.getvalue(), LocalEmbeddings(Settings().model_cache_dir))
-    a, b = result["chunks"]
+    # 小表：一个整表片段，加上归到整表节点、作检索入口的各行片段。
+    whole, a, b = result["chunks"]
+    assert whole["kind"] == "table" and whole["table_whole"] and "City A" in whole["content"]
+    assert a["node_id"] == b["node_id"] == whole["node_id"] and a["expanded"] == whole["content"]
     assert a["warnings"] and b["warnings"] and (a["row"], b["row"]) == (2, 3)
     assert a["location_status"] == b["location_status"] == "complete"
     assert len(a["regions"]) == len(b["regions"]) == 2

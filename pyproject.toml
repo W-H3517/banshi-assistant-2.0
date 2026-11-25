@@ -22,7 +22,14 @@ dependencies = [
     "rapidocr==3.10.0",
     "onnxruntime>=1.31.1",
     "pypdfium2==5.15.1",
+    "rapid-layout==1.2.1",
+    "rapid-table==3.0.2",
 ]
+
+[tool.uv]
+# rapid-layout / rapid-table 声明依赖带界面的 opencv-python，与 rapidocr 的 opencv-python-headless
+# 安装同一个 cv2 模块会互相覆盖；只保留 headless 版。
+override-dependencies = ["opencv-python; sys_platform == 'never'"]
 
 [dependency-groups]
 dev = [

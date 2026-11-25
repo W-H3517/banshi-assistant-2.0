@@ -121,7 +121,7 @@ def test_nested_article_and_neighbors_do_not_cross_structure():
     assert [content[n["id"]] for n in parts] == texts[1:6]
 
 
-def test_table_rows_keep_fields_and_read_separately(app_client):
+def test_small_table_hit_returns_whole_table_and_query_table_finds_rows(app_client):
     stream = BytesIO()
     table = Table([["Region", "Limit"], ["City A", "500"], ["City B", "400"]])
     table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 1, colors.black)]))
@@ -130,25 +130,26 @@ def test_table_rows_keep_fields_and_read_separately(app_client):
     document_id = upload(client, stream.getvalue(), "table.pdf")
     kb = client.app.state.db.knowledge
     hits = client.portal.call(kb.search, "500", document_id)
-    target = next(h for h in hits if "500" in h["content"])
-    assert "Limit" in target["content"] and "Region" in target["content"]
-    assert "制度：" not in target["content"]
-    result = client.portal.call(kb.read, target["node_id"])
-    assert result["pagination_complete"] and len(result["items"]) == 1
-    assert "400" not in result["items"][0]["content"]
-    assert result["items"][0]["header_pages"] == [1]
-    assert result["items"][0]["warnings"]
-    assert "header_cells" not in result["items"][0]["table"]
-    geometry = client.portal.call(kb.read, target["node_id"], "node", 1, None, None, True)
-    assert geometry["items"][0]["table"]["header_cells"]
-    assert geometry["items"][0]["table"]["fields"][0]["bbox"]
-    assert len(json.dumps(result)) < len(json.dumps(geometry))
-    # 读取父表格节点得到整表：表头一次、每行一条，不再逐行重复。
-    whole = client.portal.call(kb.read, result["items"][0]["parent_id"])
+    # 小表命中任一行都返回整表，作为一条结果。
+    target, = [h for h in hits if "500" in h["content"]]
+    assert target["kind"] == "table" and target["excerpt_complete"]
+    assert "Region：City A" in target["content"] and "Region：City B" in target["content"]
+    whole = client.portal.call(kb.read, target["node_id"])
     assert whole["target"]["kind"] == "table" and len(whole["items"]) == 1
     text = whole["items"][0]["content"]
     assert "列：Region | Limit" in text and "City A | 500" in text and "City B | 400" in text
     assert whole["items"][0]["table"]["row_count"] == 2 and whole["reading_complete"]
+    # 查表：按单元格值筛行，返回字段、单位与行节点；单行仍可单独读取。
+    found = client.portal.call(kb.query_table, target["node_id"], ["City B"], [])
+    row, = found["rows"]
+    assert row["fields"] == {"Region": "City B", "Limit": "400"}
+    assert found["table"]["columns"] == ["Region", "Limit"] and found["table"]["total_rows"] == 2
+    single = client.portal.call(kb.read, row["node_id"])
+    assert single["pagination_complete"] and "400" in single["items"][0]["content"]
+    assert "500" not in single["items"][0]["content"]
+    assert client.portal.call(kb.query_table, row["node_id"], ["City C"], [])["note"]
+    with pytest.raises(ValueError, match="不是表格"):
+        client.portal.call(kb.query_table, whole["target"]["parent_id"], [], [])
 
 
 def test_agent_search_and_sources(tmp_path):
@@ -159,7 +160,7 @@ def test_agent_search_and_sources(tmp_path):
         requests.append(body)
         if len(requests) == 1:
             names = {t["function"]["name"] for t in body["tools"]}
-            assert names == {"ask_question", "search_documents"}
+            assert names == {"ask_question", "search_documents", "query_table"}
             assert "locate_document_structure" not in json.dumps(body["messages"])
             return tool("search_documents", {"queries": ["酒店预算上限"]}, "search1")
         previous = json.loads(body["messages"][-1]["content"])
